@@ -1,0 +1,21 @@
+{
+  "name": "soreya-ai-secretary",
+  "version": "0.1.0",
+  "private": true,
+  "workspaces": [
+    "apps/*",
+    "packages/*"
+  ],
+  "scripts": {
+    "web": "npm run dev --workspace apps/web",
+    "mobile": "npm run start --workspace apps/mobile",
+    "dev:web": "npm run dev --workspace apps/web",
+    "dev:mobile": "npm run start --workspace apps/mobile",
+    "build:web": "npm run build --workspace apps/web",
+    "lint:web": "npm run lint --workspace apps/web",
+    "lint:mobile": "npm run lint --workspace apps/mobile",
+    "typecheck:mobile": "./node_modules/.bin/tsc --noEmit --project apps/mobile/tsconfig.json",
+    "verify": "npm run build --workspace apps/web && npm run lint --workspace apps/web && ./node_modules/.bin/tsc --noEmit --project apps/mobile/tsconfig.json && npm run lint --workspace apps/mobile",
+    "migrations:list": "ls -1 supabase/migrations"
+  }
+}

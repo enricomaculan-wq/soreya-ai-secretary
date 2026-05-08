@@ -1,0 +1,11 @@
+{
+  "name": "@soreya/database",
+  "version": "0.1.0",
+  "private": true,
+  "dependencies": {
+    "@soreya/shared": "*",
+    "@supabase/supabase-js": "^2.105.3"
+  },
+  "main": "index.ts",
+  "types": "index.ts"
+}
