@@ -6,6 +6,8 @@ export type Json =
   | { [key: string]: Json | undefined }
   | Json[];
 
+export * from "./demo-data";
+
 export type DateTime = string;
 export type Time = string;
 export type Uuid = string;
