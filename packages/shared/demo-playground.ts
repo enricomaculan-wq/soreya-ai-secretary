@@ -8,6 +8,7 @@ export type DemoDetectedIntent =
   | "reschedule_appointment"
   | "delay_notice"
   | "cancel_appointment"
+  | "appointment_lookup"
   | "callback_request"
   | "manual_review";
 
@@ -29,6 +30,7 @@ export type DemoAppointmentRequest = {
     | "new_appointment"
     | "reschedule_existing"
     | "delay_existing"
+    | "lookup_existing"
     | "callback_request"
     | "generic_request"
     | "unknown";
@@ -62,6 +64,7 @@ export type DemoCustomerRequestAnalysis = DemoCustomerRequestInput & {
     | "reschedule_existing"
     | "delay_existing"
     | "cancel_existing"
+    | "lookup_existing"
     | "callback_request"
     | "generic_request"
     | "unknown";
@@ -95,6 +98,7 @@ export type DemoCustomerRequestAnalysis = DemoCustomerRequestInput & {
   proposedMoveToText?: string | null;
   requestedStartsAt: string | null;
   requestedEndsAt: string | null;
+  reason?: string | null;
   conflictDetected: boolean;
   alternatives: AvailabilitySlot[];
   summary?: string;
@@ -211,6 +215,24 @@ const CANCELLATION_KEYWORDS = [
   "solved it another way",
 ] as const;
 
+const APPOINTMENT_LOOKUP_PATTERNS = [
+  /non\s+(?:mi\s+)?ricordo\s+(?:piu\s+)?quando\s+ho\s+l?'?appuntamento/,
+  /mi\s+ricordi\s+(?:l?'?appuntamento|quando|a\s+che\s+ora)/,
+  /quando\s+ho\s+(?:l?'?appuntamento|appuntamento)/,
+  /(?:riesci\s+a\s+guardare|puoi\s+controllare).*appuntamento/,
+  /appuntamento.*(?:riesci\s+a\s+guardare|puoi\s+controllare)/,
+  /quando\s+ci\s+vediamo/,
+  /a\s+che\s+ora\s+ho\s+l?'?appuntamento/,
+  /che\s+giorno\s+ho\s+l?'?appuntamento/,
+  /when\s+is\s+my\s+appointment/,
+  /what\s+time\s+is\s+my\s+appointment/,
+  /can\s+you\s+remind\s+me\s+when\s+my\s+appointment\s+is/,
+  /remind\s+me\s+when\s+my\s+appointment\s+is/,
+  /i\s+don'?t\s+remember\s+my\s+appointment/,
+  /can\s+you\s+check\s+my\s+appointment/,
+  /when\s+are\s+we\s+meeting/,
+] as const;
+
 export function analyzeDemoCustomerRequest(input: DemoCustomerRequestInput): DemoCustomerRequestAnalysis {
   const core = analyzeDemoCustomerRequestCore(input);
   const availability = resolveDemoAvailability(core);
@@ -274,6 +296,7 @@ export function buildDemoApprovalFromRequest(input: DemoCustomerRequestInput | D
     proposedMoveToText: analysis.proposedMoveToText,
     requestedStartsAt: analysis.requestedStartsAt,
     requestedEndsAt: analysis.requestedEndsAt,
+    reason: analysis.reason,
     conflictDetected: analysis.conflictDetected,
     alternatives: analysis.alternatives as unknown as Json,
     body: analysis.suggestedReply,
@@ -335,7 +358,7 @@ function analyzeDemoCustomerRequestCore(input: DemoCustomerRequestInput): DemoAn
   const customerText = input.customerText.trim();
   const normalizedText = normalizeText(customerText);
   const detectedIntent = detectIntent(normalizedText);
-  const isAppointmentRequest = detectedIntent === "new_appointment" || detectedIntent === "reschedule_appointment";
+  const isAppointmentRequest = detectedIntent === "new_appointment" || detectedIntent === "reschedule_appointment" || detectedIntent === "appointment_lookup";
   const parsedDateTime = parseRequestedDateTime(normalizedText);
   const customerName = extractCustomerName(customerText);
   const delayMinutes = extractDelayMinutes(normalizedText);
@@ -388,6 +411,13 @@ function analyzeDemoCustomerRequestCore(input: DemoCustomerRequestInput): DemoAn
 }
 
 function resolveDemoAvailability(core: DemoAnalysisCore): DemoAvailabilityResult {
+  if (core.detectedIntent === "appointment_lookup") {
+    return {
+      conflictDetected: false,
+      alternatives: [],
+    };
+  }
+
   if (!core.isAppointmentRequest && core.detectedIntent !== "callback_request") {
     return {
       conflictDetected: false,
@@ -447,6 +477,12 @@ function buildSuggestedReplyFromAnalysis(analysis: DemoCustomerRequestAnalysis):
     return analysis.needsMoreInfo
       ? translate(dictionary, "demoPlayground.engine.replies.callbackNeedsInfo", { requestedTime, alternatives })
       : translate(dictionary, "demoPlayground.engine.replies.callback", { requestedTime });
+  }
+
+  if (analysis.detectedIntent === "appointment_lookup") {
+    return translate(dictionary, "demoPlayground.engine.replies.appointmentLookup", {
+      startsAt: analysis.locale === "it" ? "domani alle 15:00" : "tomorrow at 3:00 PM",
+    });
   }
 
   if (analysis.detectedIntent === "reschedule_appointment") {
@@ -538,6 +574,10 @@ function buildMissingFields(input: {
     return missingFields;
   }
 
+  if (input.detectedIntent === "appointment_lookup") {
+    return missingFields;
+  }
+
   if (!input.parsedDateTime.requestedDateTimeText) {
     missingFields.push(translate(input.dictionary, "demoPlayground.engine.missing.requestedTime"));
   }
@@ -572,6 +612,10 @@ function selectSuggestedAction(
 
   if (intent === "reschedule_appointment") {
     return "propose_calendar_reschedule";
+  }
+
+  if (intent === "appointment_lookup") {
+    return channel === "whatsapp" ? "send_whatsapp_reply" : "send_email_reply";
   }
 
   if (needsMoreInfo) {
@@ -614,11 +658,19 @@ function detectIntent(text: string): DemoDetectedIntent {
     return "reschedule_appointment";
   }
 
+  if (isAppointmentLookupText(text)) {
+    return "appointment_lookup";
+  }
+
   if (containsAny(text, APPOINTMENT_KEYWORDS)) {
     return "new_appointment";
   }
 
   return "manual_review";
+}
+
+function isAppointmentLookupText(text: string) {
+  return APPOINTMENT_LOOKUP_PATTERNS.some((pattern) => pattern.test(text));
 }
 
 function calculateConfidence(
@@ -636,6 +688,7 @@ function calculateConfidence(
     reschedule_appointment: 0.82,
     delay_notice: 0.92,
     cancel_appointment: 0.9,
+    appointment_lookup: 0.92,
     callback_request: 0.8,
     manual_review: 0.38,
   };
@@ -999,6 +1052,7 @@ function normalizeText(value: string) {
   return value
     .trim()
     .toLowerCase()
+    .replace(/[’‘]/g, "'")
     .normalize("NFD")
     .replace(/[\u0300-\u036f]/g, "");
 }

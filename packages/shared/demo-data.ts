@@ -27,9 +27,9 @@ import { resolveLocale, type SupportedLocale } from "./i18n";
 export const SOREYA_DEMO_ORGANIZATION_ID = "00000000-0000-4000-8000-000000000001";
 export const SOREYA_DEMO_USER_ID = "00000000-0000-4000-8000-000000000002";
 export const SOREYA_DEMO_COPY =
-  "Dati demo locali. Nessun provider viene chiamato e nessuna azione viene eseguita.";
+  "Questa è una simulazione. Soreya prepara solo bozze: nessun messaggio viene inviato e nessun calendario viene modificato.";
 export const SOREYA_DEMO_COPY_EN =
-  "Local demo data only. No provider is called and no action is executed.";
+  "This is a simulation. Soreya only prepares drafts: no message is sent and no calendar is changed.";
 
 export type DemoNotificationStatus = {
   expoConfigured: boolean;
@@ -800,7 +800,7 @@ function demoMeta(source: string): Json {
 const demoCopy = {
   it: {
     safety: SOREYA_DEMO_COPY,
-    organizationName: "[DEMO] Workspace locale Soreya",
+    organizationName: "[DEMO] Area locale Soreya",
     calendarDentistTitle: "[DEMO] Studio Verdi - controllo annuale",
     calendarDentistDescription: "Evento demo generato localmente per verificare Soreya.",
     calendarReviewTitle: "[DEMO] Revisione progetto con Laura",
@@ -814,8 +814,8 @@ const demoCopy = {
     emailBody: "Ciao, possiamo spostare il briefing a domani mattina verso le 11? Va bene anche una call breve.",
     whatsappBody: "[DEMO] Buongiorno, riuscite a fare un sopralluogo domani pomeriggio?",
     quickCallRawText:
-      "[DEMO] Telefonata con Mario Rossi: chiede richiamata venerdi alle 10 per confermare appuntamento e preventivo.",
-    quickCallRequestedTime: "venerdi alle 10",
+      "[DEMO] Telefonata con Mario Rossi: chiede richiamata venerdì alle 10 per confermare appuntamento e preventivo.",
+    quickCallRequestedTime: "venerdì alle 10",
     quickCallReason: "Conferma richiamata e preventivo",
     appointmentEmailTitle: "[DEMO] Briefing con Marta",
     appointmentWhatsappTitle: "[DEMO] Sopralluogo Giulia",
@@ -826,16 +826,16 @@ const demoCopy = {
     emergencyProposalBody:
       "[DEMO] Ciao Laura, potrei arrivare con circa 20 minuti di ritardo. Ti confermo qui prima di qualsiasi invio reale.",
     actionEmailTitle: "[DEMO] Rispondi a Marta e blocca le 11:00",
-    actionEmailRationale: "La richiesta e chiara e non sono stati rilevati conflitti calendario.",
+    actionEmailRationale: "La richiesta è chiara e non sono stati rilevati conflitti calendario.",
     actionEmailSubject: "Re: Spostiamo il briefing?",
     actionEmailBody:
-      "Ciao Marta, domani alle 11:00 va bene. Ti mando conferma finale dopo la mia approvazione in Soreya.",
+      "Ciao Marta, domani alle 11:00 va bene. La tengo come bozza finale dopo l'approvazione in Soreya.",
     actionWhatsappTitle: "[DEMO] Rispondi a Giulia su WhatsApp",
-    actionWhatsappRationale: "Soreya ha preparato una bozza breve, ma in demo non puo inviare.",
+    actionWhatsappRationale: "Soreya ha preparato una bozza breve, ma in demo non può inviare.",
     actionWhatsappBody:
-      "Buongiorno Giulia, domani pomeriggio alle 16:30 puo andare. Confermo appena approvato in Soreya.",
+      "Buongiorno Giulia, domani pomeriggio alle 16:30 può andare. La tengo pronta appena viene approvata in Soreya.",
     actionEmergencyTitle: "[DEMO] Avvisa Laura del ritardo",
-    actionEmergencyRationale: "La modalita emergenza puo solo preparare una pending approval in demo.",
+    actionEmergencyRationale: "La modalità emergenza può solo preparare un'approvazione in attesa nella demo.",
     actionCallTitle: "[DEMO] Prepara promemoria richiamata Mario",
     actionCallRationale: "La nota chiamata contiene dettagli sufficienti per preparare un promemoria.",
     dailySummaryTitle: "[DEMO] Riepilogo giornaliero",
@@ -843,20 +843,20 @@ const demoCopy = {
     summaryFirstAppointmentTitle: "[DEMO] Primo appuntamento alle 09:30",
     reviewDay: "Rivedi giornata",
     summaryApprovalsTitle: "[DEMO] 4 approvazioni richiedono una decisione",
-    summaryApprovalsDescription: "Sono tutte bozze e restano bloccate dall'esecuzione.",
+    summaryApprovalsDescription: "Sono tutte bozze e l'esecuzione resta bloccata.",
     openApprovals: "Apri approvazioni",
     summaryWhatsappTitle: "[DEMO] Richiesta appuntamento WhatsApp",
     summaryWhatsappDescription: "Giulia chiede un sopralluogo domani pomeriggio.",
     reviewDraft: "Rivedi bozza",
     summaryRecommendationTitle: "[DEMO] Approva solo dopo aver verificato i dettagli cliente",
     summaryRecommendationDescription: "Le azioni demo sono anteprime sicure e non contattano provider.",
-    quickCallWarning: "Modalita demo: nessun promemoria calendario o messaggio esterno verra creato.",
-    emergencyWarning: "Modalita demo: smartwatch e mobile preparano solo approvazioni.",
-    syncDuplicateWarning: "Payload webhook demo: un duplicato e stato saltato.",
+    quickCallWarning: "Modalità demo: nessun promemoria calendario o messaggio esterno verrà creato.",
+    emergencyWarning: "Modalità demo: smartwatch e mobile preparano solo approvazioni.",
+    syncDuplicateWarning: "Payload webhook demo: un duplicato è stato saltato.",
     mobileDeviceName: "[DEMO] iPhone simulatore locale",
     watchDeviceName: "[DEMO] Apple Watch via notifiche telefono",
     notificationStatus:
-      "Stato notifiche demo. Nessuna chiamata Expo push viene effettuata finche credenziali e flag reali non sono configurati.",
+      "Stato notifiche demo. Nessuna chiamata Expo push viene effettuata finché credenziali e flag reali non sono configurati.",
   },
   en: {
     safety: SOREYA_DEMO_COPY_EN,
@@ -889,13 +889,13 @@ const demoCopy = {
     actionEmailRationale: "The request is clear and no calendar conflict was detected.",
     actionEmailSubject: "Re: Can we move the briefing?",
     actionEmailBody:
-      "Hi Marta, tomorrow at 11:00 works. I will send final confirmation after approving it in Soreya.",
+      "Hi Marta, tomorrow at 11:00 works. I’ll keep this as the final draft after approval in Soreya.",
     actionWhatsappTitle: "[DEMO] Reply to Giulia on WhatsApp",
     actionWhatsappRationale: "Soreya prepared a short draft, but demo mode cannot send it.",
     actionWhatsappBody:
-      "Good morning Giulia, tomorrow afternoon at 16:30 works. I will confirm after approval in Soreya.",
+      "Good morning Giulia, tomorrow afternoon at 16:30 works. I’ll keep it ready after approval in Soreya.",
     actionEmergencyTitle: "[DEMO] Notify Laura about the delay",
-    actionEmergencyRationale: "Emergency Mode can only prepare a pending approval in demo.",
+    actionEmergencyRationale: "Emergency Mode can only prepare a pending approval in the demo.",
     actionCallTitle: "[DEMO] Prepare Mario callback reminder",
     actionCallRationale: "The call note has enough detail to prepare a reminder.",
     dailySummaryTitle: "[DEMO] Daily Summary",
