@@ -7,6 +7,7 @@ export type Json =
   | Json[];
 
 export * from "./demo-data";
+export * from "./demo-playground";
 export * from "./i18n";
 
 export type DateTime = string;
