@@ -1,8 +1,0 @@
-cat > vercel.json <<'EOF'
-{
-  "framework": "nextjs",
-  "installCommand": "npm install",
-  "buildCommand": "npm run build",
-  "outputDirectory": "apps/web/.next"
-}
-EOF
