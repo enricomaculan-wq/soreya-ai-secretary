@@ -133,6 +133,8 @@ type DemoCalendarResult = {
 type DemoCalendarScenario =
   | "reschedule_day_after_tomorrow"
   | "tomorrow_afternoon"
+  | "tomorrow_morning"
+  | "tomorrow"
   | "tomorrow_15"
   | "thursday_15"
   | "reschedule_tomorrow"
@@ -364,10 +366,12 @@ const DEMO_SYSTEM_PROMPT = [
   "For appointment lookup demo requests, assume a linked demo appointment exists for the sender, set matchedAppointment.found=true, needsCalendarCheck=true, needsClarification=false, recommendedNextStep=approve_reply.",
   "For appointment lookup demo requests, do not treat the message as a new appointment request, do not ask for the appointment reason, do not say you lack calendar access, and do not say a reminder was sent.",
   "'Prima disponibilità utile', 'prima disponibilità', 'first available slot' and 'earliest availability' mean the customer is asking for the first available slot.",
-  "Recognize appointment reasons/services including carie, cavity, toothache, pain, dolore, urgenza, urgent, emergenza, emergency, controllo, check-up, preventivo, quote, consulenza, consultation and visita.",
+  "Recognize appointment reasons/services including carie, cavity, toothache, pain, dolore, urgenza, urgent, emergenza, emergency, controllo, check-up, preventivo, quote, consulenza, consultation, igiene dentale, dental cleaning and visita.",
   "If the text contains carie or cavity, set the reason to 'urgenza per carie' in Italian or 'urgent cavity-related appointment' in English.",
   "If an urgent request includes a reason, do not ask for the reason; set urgency=urgent, detectedIntent=new_appointment, appointmentContextType=new_appointment, needsClarification=false and recommendedNextStep=propose_slots.",
   "For urgent or earliest-availability demo requests with a reason, propose fast concrete slots: today at 4:30 PM and tomorrow at 9:30 AM.",
+  "If a new appointment request says only tomorrow and includes a reason, treat the date as present and propose tomorrow at 9:30 AM and 11:00 AM.",
+  "If it says tomorrow morning, propose tomorrow at 9:30 AM and 11:00 AM; if it says tomorrow afternoon, propose tomorrow at 4:30 PM and 5:15 PM.",
   "If the new appointment reason/service is missing, ask a clarification question instead of proposing slots.",
   "If the customer asks to cancel, annul, delete or disdire appointments, classify as cancel_appointment.",
   "If a cancellation request says all appointments, treat it as all future appointments linked to the sender.",
@@ -824,7 +828,12 @@ function cleanSenderName(senderText: string, contact: string | null) {
     value = value.replace(contact, "").replace(normalizePhone(contact), "").trim();
   }
 
-  return value || null;
+  value = value
+    .replace(/\+?\d[\d\s().-]{5,}\d/g, "")
+    .replace(/\s+/g, " ")
+    .trim();
+
+  return value ? toDisplayName(value) : null;
 }
 
 function extractNameFromCustomerText(text: string) {
@@ -882,7 +891,7 @@ function detectIntent(text: string): DemoDetectedIntent {
   }
 
   if (
-    /\b(disponibilita|available|availability|appuntamento|preventivo|consulenza|controllo|visita|sopralluogo|passare|fissare|prenotare|carie|dolore|urgenza|urgente|emergenza|appointment|quote|consultation|check|check-up|book|schedule|visit|come|cavity|toothache|pain|urgent|emergency)\b/.test(normalized)
+    /\b(disponibilita|available|availability|appuntamento|preventivo|igiene dentale|pulizia dentale|consulenza|controllo|visita|sopralluogo|passare|fissare|prenotare|carie|dolore|urgenza|urgente|emergenza|appointment|quote|dental cleaning|consultation|check|check-up|book|schedule|visit|come|cavity|toothache|pain|urgent|emergency)\b/.test(normalized)
   ) {
     return "new_appointment";
   }
@@ -908,6 +917,7 @@ function detectAppointmentReason(text: string, locale: SupportedLocale) {
   const reasons = locale === "it"
     ? [
         { key: "preventivo", patterns: ["preventivo", "quote"] },
+        { key: "igiene dentale", patterns: ["igiene dentale", "pulizia dentale", "dental cleaning"] },
         { key: "consulenza", patterns: ["consulenza", "consultation"] },
         { key: "controllo", patterns: ["controllo", "check"] },
         { key: "visita", patterns: ["visita", "visit"] },
@@ -915,6 +925,7 @@ function detectAppointmentReason(text: string, locale: SupportedLocale) {
       ]
     : [
         { key: "quote", patterns: ["quote", "estimate", "preventivo"] },
+        { key: "dental cleaning", patterns: ["dental cleaning", "igiene dentale", "pulizia dentale"] },
         { key: "consultation", patterns: ["consultation", "consulenza"] },
         { key: "check-up", patterns: ["check-up", "checkup", "check", "control", "controllo"] },
         { key: "visit", patterns: ["visit", "visita"] },
@@ -1044,6 +1055,18 @@ function resolveDemoCalendar(
     };
   }
 
+  if (hasTomorrow(normalized) && hasMorning(normalized)) {
+    return {
+      requestedDateTimeText: locale === "it" ? "domani mattina" : "tomorrow morning",
+      requestedStartsAt: null,
+      requestedEndsAt: null,
+      needsCalendarCheck: true,
+      conflictDetected: false,
+      alternatives: [toSlot(tomorrow, 9, 30), toSlot(tomorrow, 11, 0)],
+      scenario: "tomorrow_morning",
+    };
+  }
+
   if (hasTomorrow(normalized) && hasThreePm(normalized)) {
     const requestedStart = atLocal(dateKey(tomorrow), 15, 0);
 
@@ -1055,6 +1078,18 @@ function resolveDemoCalendar(
       conflictDetected: true,
       alternatives: [toSlot(tomorrow, 16, 30), toSlot(tomorrow, 17, 15)],
       scenario: "tomorrow_15",
+    };
+  }
+
+  if (hasTomorrow(normalized)) {
+    return {
+      requestedDateTimeText: locale === "it" ? "domani" : "tomorrow",
+      requestedStartsAt: null,
+      requestedEndsAt: null,
+      needsCalendarCheck: true,
+      conflictDetected: false,
+      alternatives: [toSlot(tomorrow, 9, 30), toSlot(tomorrow, 11, 0)],
+      scenario: "tomorrow",
     };
   }
 
@@ -1562,6 +1597,7 @@ function formatThirdPartyReason(reason: string, locale: SupportedLocale) {
 
   const articleByReason: Record<string, string> = {
     preventivo: "un preventivo",
+    "igiene dentale": "un'igiene dentale",
     consulenza: "una consulenza",
     controllo: "un controllo",
     visita: "una visita",
@@ -2457,11 +2493,7 @@ function buildSummary(input: {
         return buildUrgentAppointmentSummary(input);
       }
 
-      const reasonText = input.reason ? formatThirdPartyReason(input.reason, input.locale) : "the appointment";
-
-      return input.reason
-        ? `New appointment request for ${reasonText}${input.calendar.requestedDateTimeText ? ` around ${input.calendar.requestedDateTimeText}` : ""}.`
-        : "New appointment request, but the reason is missing.";
+      return buildNewAppointmentSummary(input);
     }
 
     return "Request to review before preparing an action.";
@@ -2504,14 +2536,37 @@ function buildSummary(input: {
       return buildUrgentAppointmentSummary(input);
     }
 
-    const reasonText = input.reason ? formatThirdPartyReason(input.reason, input.locale) : "l'appuntamento";
-
-    return input.reason
-      ? `Nuova richiesta appuntamento per ${reasonText}${input.calendar.requestedDateTimeText ? ` ${input.calendar.requestedDateTimeText}` : ""}.`
-      : "Nuova richiesta appuntamento, ma manca il motivo.";
+    return buildNewAppointmentSummary(input);
   }
 
   return "Richiesta da rivedere prima di preparare un'azione.";
+}
+
+function buildNewAppointmentSummary(input: {
+  locale: SupportedLocale;
+  reason: string | null;
+  sender: SenderIdentity;
+  calendar: DemoCalendarResult;
+}) {
+  const customerName = firstName(senderDisplayName(input.sender) ?? input.sender.senderName);
+
+  if (input.locale === "en") {
+    const customer = customerName ?? "The customer";
+    const reasonText = input.reason ? formatThirdPartyReason(input.reason, input.locale) : "the appointment";
+    const dateText = input.calendar.requestedDateTimeText ? ` for ${input.calendar.requestedDateTimeText}` : "";
+
+    return input.reason
+      ? `${customer} asks for availability${dateText} for an appointment related to ${reasonText}.`
+      : `${customer} asks for an appointment, but the reason is missing.`;
+  }
+
+  const customer = customerName ?? "Il cliente";
+  const dateText = input.calendar.requestedDateTimeText ? ` per ${input.calendar.requestedDateTimeText}` : "";
+  const reasonText = input.reason ? formatThirdPartyReason(input.reason, input.locale) : null;
+
+  return reasonText
+    ? `${customer} chiede disponibilità${dateText} per un appuntamento legato a ${reasonText}.`
+    : `${customer} chiede un appuntamento, ma manca il motivo.`;
 }
 
 function buildUrgentAppointmentSummary(input: {
@@ -2614,8 +2669,10 @@ function buildSuggestedReply(input: {
       }
 
       const reasonText = input.reason ? formatThirdPartyReason(input.reason, input.locale) : "the appointment";
-      const slotPrefix = usesClockOnlyAlternatives(input.calendar) ? "at " : "";
-      return `Sure, for ${reasonText} I have availability ${input.calendar.requestedDateTimeText ? `${input.calendar.requestedDateTimeText} ` : ""}${slotPrefix}${alternatives}. Which one works better for you?`;
+      const slotText = usesClockOnlyAlternatives(input.calendar)
+        ? `at ${formatAlternativeClockTimes(input.calendar, input.locale)}`
+        : alternatives;
+      return `Sure, for ${reasonText} I have availability ${input.calendar.requestedDateTimeText ? `${input.calendar.requestedDateTimeText} ` : ""}${slotText}. Which one works better for you?`;
     }
 
     return "Thanks, I have noted your request and will review it before preparing any action.";
@@ -2669,8 +2726,12 @@ function buildSuggestedReply(input: {
     }
 
     const reasonText = input.reason ? formatThirdPartyReason(input.reason, input.locale) : "l'appuntamento";
-    const slotPrefix = usesClockOnlyAlternatives(input.calendar) ? "alle " : "";
-    return `Certo, per ${reasonText} ${input.calendar.requestedDateTimeText ? `${input.calendar.requestedDateTimeText} ` : ""}ho disponibilità ${slotPrefix}${alternatives}. Quale preferisci?`;
+    const firstName = getReplyFirstName(input.sender);
+    const greeting = firstName ? `Certo ${firstName},` : "Certo,";
+    const slotText = usesClockOnlyAlternatives(input.calendar)
+      ? formatAlternativeClockTimes(input.calendar, input.locale)
+      : alternatives;
+    return `${greeting} per ${reasonText} ${input.calendar.requestedDateTimeText ? `${input.calendar.requestedDateTimeText} ` : ""}ho disponibilità ${slotText}. Quale orario preferisci?`;
   }
 
   return "Grazie, ho preso nota della richiesta e la rivedo prima di preparare qualsiasi azione.";
@@ -2779,7 +2840,12 @@ function formatAlternativeTimes(calendar: DemoCalendarResult, locale: SupportedL
         return locale === "it" ? `dopodomani alle ${time}` : `day after tomorrow at ${time}`;
       }
 
-      if (calendar.scenario === "tomorrow_afternoon" || calendar.scenario === "tomorrow_15") {
+      if (
+        calendar.scenario === "tomorrow" ||
+        calendar.scenario === "tomorrow_morning" ||
+        calendar.scenario === "tomorrow_afternoon" ||
+        calendar.scenario === "tomorrow_15"
+      ) {
         return formatSlotTime(slot.startsAt, locale);
       }
 
@@ -2797,7 +2863,10 @@ function formatAlternativeTimes(calendar: DemoCalendarResult, locale: SupportedL
 }
 
 function usesClockOnlyAlternatives(calendar: DemoCalendarResult) {
-  return calendar.scenario === "tomorrow_afternoon" || calendar.scenario === "tomorrow_15";
+  return calendar.scenario === "tomorrow" ||
+    calendar.scenario === "tomorrow_morning" ||
+    calendar.scenario === "tomorrow_afternoon" ||
+    calendar.scenario === "tomorrow_15";
 }
 
 function formatAlternativeClockTimes(calendar: DemoCalendarResult, locale: SupportedLocale) {
@@ -2859,6 +2928,10 @@ function detectRequestedDateTimeText(text: string, locale: SupportedLocale) {
     return locale === "it" ? "domani pomeriggio" : "tomorrow afternoon";
   }
 
+  if (hasTomorrow(normalized) && hasMorning(normalized)) {
+    return locale === "it" ? "domani mattina" : "tomorrow morning";
+  }
+
   if (hasNextWeek(normalized)) {
     return locale === "it" ? "prossima settimana" : "next week";
   }
@@ -2869,6 +2942,10 @@ function detectRequestedDateTimeText(text: string, locale: SupportedLocale) {
 
   if (hasTomorrow(normalized) && hasThreePm(normalized)) {
     return locale === "it" ? "domani alle 15:00" : "tomorrow at 3:00 PM";
+  }
+
+  if (hasTomorrow(normalized)) {
+    return locale === "it" ? "domani" : "tomorrow";
   }
 
   return null;
