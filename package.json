@@ -17,5 +17,8 @@
     "typecheck:mobile": "./node_modules/.bin/tsc --noEmit --project apps/mobile/tsconfig.json",
     "verify": "npm run build --workspace apps/web && npm run lint --workspace apps/web && ./node_modules/.bin/tsc --noEmit --project apps/mobile/tsconfig.json && npm run lint --workspace apps/mobile",
     "migrations:list": "ls -1 supabase/migrations"
+  },
+  "devDependencies": {
+    "next": "16.2.5"
   }
 }
