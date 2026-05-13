@@ -874,7 +874,7 @@ function detectIntent(text: string): DemoDetectedIntent {
     return "cancel_appointment";
   }
 
-  if (/(ritardo|in ritardo|possiamo piu tardi|sentirci piu tardi|tra un'ora|fra un'ora|running late|\blate\b|\bdelay\b|delayed|talk later|speak later|in an hour)/.test(normalized)) {
+  if (isDelayNoticeText(normalized)) {
     return "delay_notice";
   }
 
@@ -901,6 +901,10 @@ function detectIntent(text: string): DemoDetectedIntent {
 
 function isAppointmentLookupText(normalizedText: string) {
   return /(?:non\s+(?:mi\s+)?ricordo\s+(?:piu\s+)?quando\s+ho\s+l?'?appuntamento|mi\s+ricordi\s+(?:l?'?appuntamento|quando|a\s+che\s+ora)|quando\s+ho\s+(?:l?'?appuntamento|appuntamento)|(?:riesci\s+a\s+guardare|puoi\s+controllare).*appuntamento|appuntamento.*(?:riesci\s+a\s+guardare|puoi\s+controllare)|quando\s+ci\s+vediamo|a\s+che\s+ora\s+ho\s+l?'?appuntamento|che\s+giorno\s+ho\s+l?'?appuntamento|when\s+is\s+my\s+appointment|what\s+time\s+is\s+my\s+appointment|can\s+you\s+remind\s+me\s+when\s+my\s+appointment\s+is|remind\s+me\s+when\s+my\s+appointment\s+is|i\s+don'?t\s+remember\s+my\s+appointment|can\s+you\s+check\s+my\s+appointment|when\s+are\s+we\s+meeting)/.test(normalizedText);
+}
+
+function isDelayNoticeText(normalizedText: string) {
+  return /(?:\bsono\s+in\s+ritardo\b|\britardo(?:\s+di\s+\d+\s+minuti)?\b|blocc(?:ato|ata|ati|ate)?\s+(?:nel|in)\s+traffico|\btraffico\b|riesci\s+a\s+sentir(?:mi|ci)\s+piu\s+tardi|possiamo\s+sentirci\s+piu\s+tardi|sentirci\s+piu\s+tardi|chiamarci\s+piu\s+tardi|sentirci\s+dopo|tra un'ora|fra un'ora|stuck in traffic|running late|can we talk later|can we speak later|talk later|speak later|\bi'?m late\b|\bi am late\b|\blate\b|\bdelay\b|delayed|in an hour)/.test(normalizedText);
 }
 
 function detectAppointmentReason(text: string, locale: SupportedLocale) {
@@ -2003,7 +2007,7 @@ function getDemoRescheduleAlternativesForRequestedDate(
   }
 
   if (dateKind === "tomorrow") {
-    return [toSlot(dates.tomorrow, 16, 30), toSlot(dates.friday, 9, 30)];
+    return [toSlot(dates.tomorrow, 16, 30), toSlot(dates.dayAfterTomorrow, 9, 30)];
   }
 
   if (dateKind === "thursday") {
@@ -2500,9 +2504,7 @@ function buildSummary(input: {
   }
 
   if (input.intent === "delay_notice") {
-    return delayMinutes
-      ? `Il cliente segnala un ritardo di circa ${delayMinutes} minuti e chiede di sentirsi più tardi.`
-      : "Il cliente segnala un ritardo e chiede di sentirsi più tardi.";
+    return buildDelaySummary(input);
   }
 
   if (input.intent === "callback_request") {
@@ -2567,6 +2569,48 @@ function buildNewAppointmentSummary(input: {
   return reasonText
     ? `${customer} chiede disponibilità${dateText} per un appuntamento legato a ${reasonText}.`
     : `${customer} chiede un appuntamento, ma manca il motivo.`;
+}
+
+function buildDelaySummary(input: {
+  locale: SupportedLocale;
+  customerText: string;
+  sender: SenderIdentity;
+}) {
+  const customerName = firstName(senderDisplayName(input.sender) ?? input.sender.senderName);
+  const normalized = normalizeText(input.customerText);
+  const delayMinutes = extractDelayMinutes(input.customerText);
+  const hasTraffic = /(?:\btraffico\b|stuck in traffic)/.test(normalized);
+  const asksLater = /(?:sentir(?:mi|ci)\s+piu\s+tardi|possiamo\s+sentirci\s+piu\s+tardi|chiamarci\s+piu\s+tardi|sentirci\s+dopo|talk later|speak later)/.test(normalized);
+
+  if (input.locale === "en") {
+    const customer = customerName ?? "The customer";
+
+    if (hasTraffic && asksLater) {
+      return `${customer} says they are running late/stuck in traffic and asks to talk later.`;
+    }
+
+    if (hasTraffic) {
+      return `${customer} says they are stuck in traffic and asks to talk later.`;
+    }
+
+    return delayMinutes
+      ? `${customer} is running about ${delayMinutes} minutes late and asks to talk later.`
+      : `${customer} is running late and asks to talk later.`;
+  }
+
+  const customer = customerName ?? "Il cliente";
+
+  if (hasTraffic && asksLater) {
+    return `${customer} avvisa che è in ritardo/bloccato nel traffico e chiede di sentirsi più tardi.`;
+  }
+
+  if (hasTraffic) {
+    return `${customer} avvisa che è bloccato nel traffico e chiede di sentirsi più tardi.`;
+  }
+
+  return delayMinutes
+    ? `${customer} avvisa che è in ritardo di circa ${delayMinutes} minuti e chiede di sentirsi più tardi.`
+    : `${customer} avvisa che è in ritardo e chiede di sentirsi più tardi.`;
 }
 
 function buildUrgentAppointmentSummary(input: {
@@ -2686,7 +2730,9 @@ function buildSuggestedReply(input: {
   }
 
   if (input.intent === "delay_notice") {
-    return "Certo, nessun problema. Sentiamoci tra circa un’oretta, così abbiamo più margine. Ti va bene?";
+    const firstName = getReplyFirstName(input.sender);
+    const greeting = firstName ? `Certo ${firstName}` : "Certo";
+    return `${greeting}, nessun problema. Sentiamoci tra circa un’oretta, così abbiamo più margine. Ti va bene?`;
   }
 
   if (input.intent === "callback_request") {
@@ -2711,7 +2757,9 @@ function buildSuggestedReply(input: {
     }
 
     if (input.calendar.scenario === "reschedule_tomorrow") {
-      return `Certo, possiamo posticipare l'incontro di domani. Ho disponibilità ${alternatives}. Quale orario preferisci?`;
+      const firstName = getReplyFirstName(input.sender);
+      const greeting = firstName ? `Certo ${firstName}` : "Certo";
+      return `${greeting}, possiamo posticipare l’incontro di domani. Ti propongo ${alternatives}. Quale orario preferisci?`;
     }
 
     return `Certo, possiamo rimandare l'appuntamento. Ti propongo ${alternatives}. Quale preferisci?`;
@@ -2847,6 +2895,14 @@ function formatAlternativeTimes(calendar: DemoCalendarResult, locale: SupportedL
         calendar.scenario === "tomorrow_15"
       ) {
         return formatSlotTime(slot.startsAt, locale);
+      }
+
+      if (
+        calendar.scenario === "reschedule_tomorrow" &&
+        index === 1
+      ) {
+        const time = formatSlotTime(slot.startsAt, locale);
+        return locale === "it" ? `dopodomani alle ${time}` : `day after tomorrow at ${time}`;
       }
 
       if (
