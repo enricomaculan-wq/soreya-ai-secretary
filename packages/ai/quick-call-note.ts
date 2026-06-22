@@ -2,6 +2,7 @@ import type {
   AvailabilitySlot,
   Json,
   NormalizedCalendarEvent,
+  OrganizationBrainContext,
   QuickCallAnalysis,
   QuickCallIntentType,
   QuickCallNote,
@@ -9,6 +10,9 @@ import type {
   UserRule,
 } from "@soreya/shared";
 
+import { readRequiredDurationMinutesFromConstraints } from "@soreya/shared";
+
+import { filterAlternativesForBrainConstraints } from "./brain";
 import { findAvailableSlots, suggestAlternativeSlots } from "./calendar";
 import { analyzeQuickCallWithAI as analyzeQuickCallWithOpenAI } from "./appointment-ai";
 
@@ -16,6 +20,8 @@ export type QuickCallContext = {
   timezone?: string;
   events?: NormalizedCalendarEvent[];
   userRules?: UserRule[];
+  brainContext?: OrganizationBrainContext;
+  fallbackAnalysis?: QuickCallAnalysis;
 };
 
 export type QuickCallAppointmentRequestDraft = {
@@ -310,35 +316,39 @@ export function suggestQuickCallAlternativeSlots(
   userRules: UserRule[] = [],
   analysis: QuickCallAnalysis,
 ): AvailabilitySlot[] {
-  const rules = { userRules };
+  const requiredDurationMinutes = readRequiredDurationMinutesFromConstraints(analysis.extractedConstraints);
+  const rules = { userRules, durationMinutes: requiredDurationMinutes };
 
-  if (analysis.requestedStartsAt && analysis.requestedEndsAt) {
-    return suggestAlternativeSlots(events, rules, analysis.requestedStartsAt, analysis.requestedEndsAt).slice(0, MAX_ALTERNATIVES);
+  if (analysis.requestedStartsAt) {
+    const requestedEnd = analysis.requestedEndsAt
+      ?? new Date(new Date(analysis.requestedStartsAt).getTime() + requiredDurationMinutes * 60_000).toISOString();
+    const alternatives = suggestAlternativeSlots(events, rules, analysis.requestedStartsAt, requestedEnd).slice(0, MAX_ALTERNATIVES);
+    return filterAlternativesForBrainConstraints(alternatives, analysis.extractedConstraints);
   }
 
   const start = new Date(Math.max(Date.now(), Date.now() + minutes(30))).toISOString();
   const endDate = new Date(Date.now());
   endDate.setUTCDate(endDate.getUTCDate() + 7);
 
-  return findAvailableSlots(
+  const alternatives = findAvailableSlots(
     events,
-    {
-      ...rules,
-      durationMinutes: DEFAULT_DURATION_MINUTES,
-    },
+    rules,
     start,
     endDate.toISOString(),
   ).slice(0, MAX_ALTERNATIVES);
+
+  return filterAlternativesForBrainConstraints(alternatives, analysis.extractedConstraints);
 }
 
 export async function analyzeQuickCallWithAI(
   rawText: string,
-  context: QuickCallContext & { fallbackAnalysis?: QuickCallAnalysis } = {},
+  context: QuickCallContext = {},
 ): Promise<QuickCallAnalysis> {
   const fallbackAnalysis = context.fallbackAnalysis ?? analyzeQuickCallNote(rawText, context);
   return analyzeQuickCallWithOpenAI(rawText, {
     timezone: context.timezone,
     fallbackAnalysis,
+    brainContext: context.brainContext,
   });
 }
 

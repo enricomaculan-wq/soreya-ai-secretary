@@ -1,12 +1,15 @@
-import { createHmac, timingSafeEqual } from "node:crypto";
-
 import {
   analyzeWhatsAppWithAI,
   buildAppointmentRequestFromWhatsAppIntent,
   buildCalendarConflict,
+  filterAlternativesForBrainConstraints,
+  finalizeSchedulingReplyForBrain,
   generateWhatsAppNeedMoreInfoReply,
   generateWhatsAppReplyDraft,
   normalizeWhatsAppWebhookMessage,
+  resolveBrainCalendarRules,
+  resolveRequestedAppointmentWindow,
+  resolveSchedulingWhatsAppReplyBody,
 } from "@soreya/ai";
 import {
   cacheIncomingWhatsAppMessages,
@@ -14,16 +17,16 @@ import {
   createWhatsAppReplySuggestion,
   getCachedCalendarEvents,
   getConnectedWhatsAppAccountByPhoneNumberId,
+  getOrganizationBrainContext,
   markWhatsAppAccountSyncStatus,
 } from "@soreya/database";
 
-import { createServerSupabaseClient } from "@/lib/server/supabase";
-import { checkRateLimit, rateLimitResponse } from "@/lib/server/rate-limit";
+import { createIntegrationServerSupabaseClient } from "@/lib/server/supabase";
+import { checkRateLimitAsync, rateLimitResponse } from "@/lib/server/rate-limit";
 import { jsonError, readWhatsAppWebhookVerifyToken } from "@/lib/server/whatsapp-api";
+import { verifyWhatsAppSignature } from "@/lib/server/whatsapp-webhook";
 
 export const runtime = "nodejs";
-
-let signatureFallbackWarned = false;
 
 export async function GET(request: Request) {
   try {
@@ -46,7 +49,7 @@ export async function GET(request: Request) {
 
 export async function POST(request: Request) {
   try {
-    const rateLimit = checkRateLimit(request, { route: "/api/whatsapp/webhook" });
+    const rateLimit = await checkRateLimitAsync(request, { route: "/api/whatsapp/webhook" });
 
     if (!rateLimit.allowed) {
       return rateLimitResponse(rateLimit);
@@ -60,7 +63,7 @@ export async function POST(request: Request) {
     }
 
     const payload = JSON.parse(rawBody) as Record<string, unknown>;
-    const supabase = createServerSupabaseClient();
+    const supabase = createIntegrationServerSupabaseClient();
     let receivedMessages = 0;
     let cachedMessages = 0;
     let appointmentRequests = 0;
@@ -105,37 +108,61 @@ export async function POST(request: Request) {
         );
 
         const calendarRange = calendarLookaheadRange();
-        const calendarEvents = await getCachedCalendarEvents(
-          supabase,
-          account.organizationId,
-          calendarRange.start,
-          calendarRange.end,
-        );
+        const [calendarEvents, brainContext] = await Promise.all([
+          getCachedCalendarEvents(
+            supabase,
+            account.organizationId,
+            calendarRange.start,
+            calendarRange.end,
+          ),
+          getOrganizationBrainContext(supabase, account.organizationId),
+        ]);
 
         for (const message of normalizedMessages) {
-          const intent = await analyzeWhatsAppWithAI(message);
+          const intent = await analyzeWhatsAppWithAI(message, { brainContext });
 
           if (!intent.isAppointmentRequest) {
             continue;
           }
 
           const requestDraft = buildAppointmentRequestFromWhatsAppIntent(message, intent);
-          const conflict = intent.requestedStartsAt && intent.requestedEndsAt
-            ? buildCalendarConflict(calendarEvents, {}, intent.requestedStartsAt, intent.requestedEndsAt)
+          const calendarRules = resolveBrainCalendarRules(intent.extractedConstraints);
+          const appointmentWindow = resolveRequestedAppointmentWindow(
+            intent.requestedStartsAt,
+            intent.requestedEndsAt,
+            intent.extractedConstraints,
+          );
+          const conflict = appointmentWindow.startsAt && appointmentWindow.endsAt
+            ? buildCalendarConflict(
+              calendarEvents,
+              calendarRules,
+              appointmentWindow.startsAt,
+              appointmentWindow.endsAt,
+            )
             : null;
+          const previousAlternativeCount = conflict?.alternatives.length ?? 0;
+          const alternatives = filterAlternativesForBrainConstraints(
+            conflict?.alternatives ?? [],
+            intent.extractedConstraints,
+          );
+          const finalizedIntent = finalizeSchedulingReplyForBrain(intent, alternatives, {
+            customerText: message.textBody ?? "",
+            previousAlternativeCount,
+          });
           const appointmentRequest = await createAppointmentRequestFromWhatsApp(supabase, {
             organizationId: account.organizationId,
             message,
-            intent,
+            intent: finalizedIntent,
             conflictDetected: Boolean(conflict?.conflictingEvents.length),
             conflictReason: conflict?.conflictingEvents.length ? "Requested time overlaps cached calendar events." : null,
-            alternatives: conflict?.alternatives ?? [],
+            alternatives,
           });
           appointmentRequests += 1;
 
-          const reply = intent.needsMoreInfo
-            ? generateWhatsAppNeedMoreInfoReply(message, ["data", "orario"])
+          const reply = finalizedIntent.needsMoreInfo
+            ? generateWhatsAppNeedMoreInfoReply(message, finalizedIntent.missingFields ?? ["date/time"])
             : generateWhatsAppReplyDraft(message, requestDraft, conflict);
+          const replyBody = resolveSchedulingWhatsAppReplyBody(reply.body, finalizedIntent.suggestedReplyBody);
 
           await createWhatsAppReplySuggestion(supabase, {
             organizationId: account.organizationId,
@@ -143,10 +170,10 @@ export async function POST(request: Request) {
             messageId: message.providerMessageId,
             phoneNumberId,
             recipientPhone: reply.recipientPhone,
-            body: intent.suggestedReplyBody ?? reply.body,
+            body: replyBody,
             appointmentRequestId: appointmentRequest.id,
-            actionType: intent.needsMoreInfo ? "ask_whatsapp_more_info" : "send_whatsapp_reply",
-            metadata: intentMetadata(intent),
+            actionType: finalizedIntent.needsMoreInfo ? "ask_whatsapp_more_info" : "send_whatsapp_reply",
+            metadata: intentMetadata(finalizedIntent),
           });
           suggestedActions += 1;
         }
@@ -172,55 +199,6 @@ export async function POST(request: Request) {
       { status: 200 },
     );
   }
-}
-
-function verifyWhatsAppSignature(
-  rawBody: string,
-  signatureHeader: string | null,
-): { allowed: true; warning?: string } | { allowed: false; reason: string } {
-  const appSecret = process.env.WHATSAPP_APP_SECRET?.trim();
-  const isProduction = process.env.NODE_ENV === "production";
-
-  if (!appSecret) {
-    if (isProduction) {
-      return { allowed: false, reason: "Missing WHATSAPP_APP_SECRET." };
-    }
-
-    if (!signatureFallbackWarned) {
-      signatureFallbackWarned = true;
-      console.warn("WhatsApp webhook signature validation skipped: WHATSAPP_APP_SECRET is not configured.");
-    }
-
-    return { allowed: true, warning: "signature_validation_skipped" };
-  }
-
-  if (!signatureHeader?.startsWith("sha256=")) {
-    return { allowed: false, reason: "Missing WhatsApp signature." };
-  }
-
-  const receivedSignature = signatureHeader.slice("sha256=".length);
-  const expectedSignature = createHmac("sha256", appSecret).update(rawBody, "utf8").digest("hex");
-
-  if (!timingSafeHexEqual(receivedSignature, expectedSignature)) {
-    return { allowed: false, reason: "Invalid WhatsApp signature." };
-  }
-
-  return { allowed: true };
-}
-
-function timingSafeHexEqual(left: string, right: string): boolean {
-  if (!/^[0-9a-f]+$/i.test(left) || !/^[0-9a-f]+$/i.test(right)) {
-    return false;
-  }
-
-  const leftBuffer = Buffer.from(left, "hex");
-  const rightBuffer = Buffer.from(right, "hex");
-
-  if (leftBuffer.length !== rightBuffer.length) {
-    return false;
-  }
-
-  return timingSafeEqual(leftBuffer, rightBuffer);
 }
 
 function intentMetadata(intent: Awaited<ReturnType<typeof analyzeWhatsAppWithAI>>) {

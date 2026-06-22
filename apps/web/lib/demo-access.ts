@@ -2,7 +2,7 @@ export const DEMO_ACCESS_COOKIE = "soreya_demo_access";
 export const DEMO_ACCESS_GRANTED_VALUE = "granted";
 export const DEMO_ACCESS_MAX_AGE_SECONDS = 60 * 60 * 24 * 7;
 
-const protectedPagePaths = ["/app", "/settings"];
+const protectedPagePaths = ["/app", "/dashboard", "/settings"];
 const protectedApiPrefixes = [
   "/api/demo",
   "/api/approvals",
@@ -10,6 +10,9 @@ const protectedApiPrefixes = [
   "/api/quick-call",
   "/api/emergency",
   "/api/daily-summary",
+  "/api/inbox",
+  "/api/privacy",
+  "/api/organization",
 ];
 
 export function readDemoAccessPassword() {
@@ -24,8 +27,22 @@ export function isDemoAccessConfigured() {
   return Boolean(readDemoAccessPassword());
 }
 
+export function isHostedPreviewEnvironment() {
+  const vercelEnv = process.env.VERCEL_ENV?.trim();
+
+  return vercelEnv === "preview" || vercelEnv === "production";
+}
+
 export function shouldBypassDemoAccessInDevelopment() {
-  return !isDemoAccessConfigured() && !isProductionEnvironment();
+  if (isProductionEnvironment() || isHostedPreviewEnvironment()) {
+    return false;
+  }
+
+  if (isDemoAccessConfigured()) {
+    return false;
+  }
+
+  return process.env.NODE_ENV === "development";
 }
 
 export function hasDemoAccess(cookieValue: string | undefined | null) {

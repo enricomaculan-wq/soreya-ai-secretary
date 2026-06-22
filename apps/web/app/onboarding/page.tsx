@@ -4,7 +4,10 @@ import { createOrganizationForUser, getCurrentUser, getUserOrganization } from "
 import { useRouter } from "next/navigation";
 import { type FormEvent, useEffect, useState } from "react";
 
+import { resolvePostLoginPath } from "@/lib/auth-paths";
+import { shouldUseWebDemoData } from "@/lib/demo-data";
 import { getSupabaseBrowserClient, hasSupabaseBrowserConfig } from "@/lib/supabase";
+import { redirectAfterAuth } from "@/lib/session";
 import { useI18n } from "@/lib/i18n";
 
 export default function OnboardingPage() {
@@ -36,18 +39,14 @@ export default function OnboardingPage() {
         }
 
         if (!user) {
-          router.replace("/login");
+          router.replace("/login?reason=session-expired");
           return;
         }
 
-        const userOrganization = await getUserOrganization(supabase, user.id);
+        const organization = await getUserOrganization(supabase, user.id);
 
-        if (!isMounted) {
-          return;
-        }
-
-        if (userOrganization) {
-          router.replace("/app");
+        if (organization) {
+          redirectAfterAuth(shouldUseWebDemoData() ? "/app" : resolvePostLoginPath("/dashboard"));
           return;
         }
 
@@ -84,7 +83,7 @@ export default function OnboardingPage() {
         name: organizationName,
         timezone,
       });
-      router.replace("/app");
+      redirectAfterAuth(shouldUseWebDemoData() ? "/app" : resolvePostLoginPath("/dashboard"));
     } catch (error) {
       setMessage(error instanceof Error ? error.message : t("common.unavailable"));
     } finally {
@@ -94,32 +93,30 @@ export default function OnboardingPage() {
 
   if (isChecking) {
     return (
-      <main className="flex min-h-screen items-center justify-center bg-[#f7f6f2] px-5 text-stone-950">
-        <p className="text-sm font-medium text-stone-600">{t("common.loading")}...</p>
+      <main className="soreya-app-shell flex min-h-screen items-center justify-center px-5">
+        <p className="text-sm font-medium text-[var(--ink-muted)]">{t("common.loading")}...</p>
       </main>
     );
   }
 
   return (
-    <main className="flex min-h-screen items-center justify-center bg-[#f7f6f2] px-5 py-10 text-stone-950">
-      <div className="w-full max-w-lg rounded-lg border border-stone-200 bg-white p-6 shadow-sm">
-        <p className="text-sm font-medium uppercase tracking-[0.12em] text-emerald-700">{t("onboarding.eyebrow")}</p>
-        <h1 className="mt-2 text-3xl font-semibold tracking-normal">{t("onboarding.title")}</h1>
-        <p className="mt-2 text-sm leading-6 text-stone-600">
-          {t("onboarding.description")}
-        </p>
+    <main className="soreya-app-shell flex min-h-screen items-center justify-center px-5 py-10">
+      <div className="soreya-auth-card w-full max-w-lg p-6 sm:p-8">
+        <p className="soreya-eyebrow">{t("onboarding.eyebrow")}</p>
+        <h1 className="mt-3 text-3xl font-semibold tracking-[-0.03em] text-[var(--foreground)]">{t("onboarding.title")}</h1>
+        <p className="soreya-lead mt-4">{t("onboarding.description")}</p>
 
         {!hasConfig ? (
-          <div className="mt-5 rounded-md border border-amber-200 bg-amber-50 p-4 text-sm text-amber-800">
+          <div className="mt-5 rounded-[var(--radius-sm)] border border-amber-200 bg-amber-50 p-4 text-sm text-amber-800">
             {t("login.missingSupabase")}
           </div>
         ) : null}
 
         <form className="mt-6 space-y-4" onSubmit={handleSubmit}>
           <label className="block">
-            <span className="text-sm font-medium text-stone-700">{t("onboarding.organizationName")}</span>
+            <span className="text-sm font-medium text-[var(--ink-muted)]">{t("onboarding.organizationName")}</span>
             <input
-              className="mt-2 h-11 w-full rounded-md border border-stone-300 px-3 text-sm outline-none focus:border-emerald-700 focus:ring-2 focus:ring-emerald-100"
+              className="soreya-input mt-2 h-11 px-3 text-sm"
               autoComplete="organization"
               minLength={2}
               value={organizationName}
@@ -129,25 +126,27 @@ export default function OnboardingPage() {
           </label>
 
           <label className="block">
-            <span className="text-sm font-medium text-stone-700">{t("onboarding.defaultTimezone")}</span>
+            <span className="text-sm font-medium text-[var(--ink-muted)]">{t("onboarding.defaultTimezone")}</span>
             <input
-              className="mt-2 h-11 w-full rounded-md border border-stone-300 px-3 text-sm outline-none focus:border-emerald-700 focus:ring-2 focus:ring-emerald-100"
+              className="soreya-input mt-2 h-11 px-3 text-sm"
               value={timezone}
               onChange={(event) => setTimezone(event.target.value)}
               required
             />
           </label>
 
-          <div className="rounded-md border border-emerald-200 bg-emerald-50 p-4 text-sm text-emerald-800">
+          <div className="soreya-trust-banner p-4 text-sm leading-relaxed">
             {t("onboarding.firstMembership")}
           </div>
 
           {message ? (
-            <p className="rounded-md border border-stone-200 bg-stone-50 p-3 text-sm text-stone-700">{message}</p>
+            <p className="rounded-[var(--radius-sm)] border border-[var(--border)] bg-[var(--surface-muted)] p-3 text-sm text-[var(--ink-muted)]">
+              {message}
+            </p>
           ) : null}
 
           <button
-            className="h-11 w-full rounded-md bg-stone-950 px-4 text-sm font-medium text-white hover:bg-stone-800 disabled:cursor-not-allowed disabled:bg-stone-400"
+            className="soreya-btn-primary h-11 w-full disabled:cursor-not-allowed disabled:opacity-50"
             disabled={isSubmitting || !hasConfig}
             type="submit"
           >

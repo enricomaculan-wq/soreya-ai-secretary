@@ -2,6 +2,8 @@ import {
   analyzeQuickCallNote,
   analyzeQuickCallWithAI,
   buildQuickCallSuggestedActions,
+  enrichWithOrganizationBrain,
+  finalizeSchedulingReplyForBrain,
   suggestQuickCallAlternativeSlots,
 } from "@soreya/ai";
 import {
@@ -9,10 +11,12 @@ import {
   createQuickCallNote,
   createQuickCallSuggestedActions,
   getCachedCalendarEvents,
+  getOrganizationBrainContext,
   updateQuickCallNoteAnalysis,
   type SoreyaSupabaseClient,
 } from "@soreya/database";
 import type {
+  AvailabilitySlot,
   QuickCallAnalysis,
   QuickCallResult,
   QuickCallSuggestedActionDraft,
@@ -49,16 +53,9 @@ export async function buildQuickCallPreview(
     timezone: string;
   },
 ): Promise<QuickCallPreview> {
-  const heuristic = analyzeQuickCallNote(input.rawText, { timezone: input.timezone });
-  const analysis = await analyzeQuickCallWithAI(input.rawText, {
-    timezone: input.timezone,
-    fallbackAnalysis: heuristic,
-  });
-  const [events, userRules] = await Promise.all([
-    getCalendarEventsForAnalysis(supabase, input.organizationId, analysis),
-    getActiveUserRules(supabase, input.organizationId),
-  ]);
-  const alternatives = suggestQuickCallAlternativeSlots(events, userRules, analysis);
+  const baseAnalysis = await analyzeQuickCallWithBrain(supabase, input);
+  const alternatives = await getQuickCallAlternatives(supabase, input, baseAnalysis);
+  const analysis = finalizeQuickCallScheduling(baseAnalysis, alternatives, input);
   const suggestedActions = buildQuickCallSuggestedActions(null, analysis, alternatives);
 
   return {
@@ -79,16 +76,9 @@ export async function persistQuickCallPlan(
     timezone: string;
   },
 ): Promise<QuickCallResult> {
-  const heuristic = analyzeQuickCallNote(input.rawText, { timezone: input.timezone });
-  const analysis = await analyzeQuickCallWithAI(input.rawText, {
-    timezone: input.timezone,
-    fallbackAnalysis: heuristic,
-  });
-  const [events, userRules] = await Promise.all([
-    getCalendarEventsForAnalysis(supabase, input.organizationId, analysis),
-    getActiveUserRules(supabase, input.organizationId),
-  ]);
-  const alternatives = suggestQuickCallAlternativeSlots(events, userRules, analysis);
+  const baseAnalysis = await analyzeQuickCallWithBrain(supabase, input);
+  const alternatives = await getQuickCallAlternatives(supabase, input, baseAnalysis);
+  const analysis = finalizeQuickCallScheduling(baseAnalysis, alternatives, input);
   const callNote = await createQuickCallNote(supabase, {
     organizationId: input.organizationId,
     createdBy: input.userId,
@@ -123,6 +113,76 @@ export async function persistQuickCallPlan(
     suggestedActions,
     warnings: buildWarnings(analysis),
     alternatives,
+  };
+}
+
+type QuickCallAnalysisWithAlternatives = QuickCallAnalysis & {
+  alternatives: AvailabilitySlot[];
+};
+
+async function getQuickCallAlternatives(
+  supabase: SoreyaSupabaseClient,
+  input: {
+    organizationId: string;
+    rawText: string;
+    timezone: string;
+  },
+  analysis: QuickCallAnalysis,
+) {
+  const [events, userRules] = await Promise.all([
+    getCalendarEventsForAnalysis(supabase, input.organizationId, analysis),
+    getActiveUserRules(supabase, input.organizationId),
+  ]);
+
+  return suggestQuickCallAlternativeSlots(events, userRules, analysis);
+}
+
+function finalizeQuickCallScheduling(
+  analysis: QuickCallAnalysis,
+  alternatives: AvailabilitySlot[],
+  input: {
+    rawText: string;
+    timezone: string;
+  },
+): QuickCallAnalysisWithAlternatives {
+  const finalized = finalizeSchedulingReplyForBrain(analysis, alternatives, {
+    customerText: input.rawText,
+    locale: input.timezone?.startsWith("Europe/Rome") ? "it-IT" : "en-US",
+  });
+
+  return {
+    ...finalized,
+    alternatives,
+  };
+}
+
+async function analyzeQuickCallWithBrain(
+  supabase: SoreyaSupabaseClient,
+  input: {
+    organizationId: string;
+    rawText: string;
+    timezone: string;
+  },
+): Promise<QuickCallAnalysis> {
+  const heuristic = analyzeQuickCallNote(input.rawText, { timezone: input.timezone });
+  const brainContext = await getOrganizationBrainContext(supabase, input.organizationId);
+  const analysis = await analyzeQuickCallWithAI(input.rawText, {
+    timezone: input.timezone,
+    fallbackAnalysis: heuristic,
+    brainContext,
+  });
+  const enriched = enrichWithOrganizationBrain(brainContext, {
+    text: input.rawText,
+    reason: analysis.reason,
+    suggestedReplyBody: analysis.suggestedReplyBody,
+    extractedConstraints: analysis.extractedConstraints,
+  });
+
+  return {
+    ...analysis,
+    suggestedReplyBody: enriched.suggestedReplyBody,
+    extractedConstraints: enriched.extractedConstraints,
+    safetyNotes: [...(analysis.safetyNotes ?? []), ...enriched.brainNotes],
   };
 }
 

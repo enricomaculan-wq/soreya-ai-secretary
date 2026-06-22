@@ -5,11 +5,14 @@ import type {
   ConnectedWhatsAppAccount,
   Json,
   NormalizedWhatsAppMessage,
+  OrganizationBrainContext,
   UserRule,
   WhatsAppAppointmentIntent,
 } from "@soreya/shared";
 
 import { analyzeAppointmentTextWithAI } from "./appointment-ai";
+import { applyBrainEnrichmentToAnalysis, brainContextToJson } from "./brain";
+import { resolveSchedulingEmailReplyBody } from "./email";
 
 type RawRecord = Record<string, unknown>;
 
@@ -34,6 +37,7 @@ export type WhatsAppAIContext = {
   userRules?: UserRule[];
   timezone?: string;
   calendarAvailability?: AvailabilitySlot[] | CalendarConflict | null;
+  brainContext?: OrganizationBrainContext;
 };
 
 const APPOINTMENT_KEYWORDS = [
@@ -191,6 +195,13 @@ export function generateWhatsAppReplyDraft(
   };
 }
 
+export function resolveSchedulingWhatsAppReplyBody(
+  draftBody: string,
+  suggestedReplyBody: string | null | undefined,
+): string {
+  return resolveSchedulingEmailReplyBody(draftBody, suggestedReplyBody);
+}
+
 export function generateWhatsAppNeedMoreInfoReply(
   message: NormalizedWhatsAppMessage,
   missingFields: string[],
@@ -222,9 +233,10 @@ export async function analyzeWhatsAppWithAI(
   context: WhatsAppAIContext = {},
 ): Promise<WhatsAppAppointmentIntent> {
   const heuristic = detectWhatsAppAppointmentIntent(message, context.userRules, context.timezone);
+  const messageText = message.textBody ?? "";
   const aiAnalysis = await analyzeAppointmentTextWithAI({
     source: "whatsapp",
-    text: message.textBody ?? "",
+    text: messageText,
     timezone: context.timezone ?? heuristic.timezone ?? undefined,
     customerName: message.fromName,
     customerPhone: message.fromPhone,
@@ -233,10 +245,14 @@ export async function analyzeWhatsAppWithAI(
       provider: message.provider,
       messageType: message.messageType,
       userRules: context.userRules?.map((rule) => ({ title: rule.title, instruction: rule.instruction })),
+      ...(context.brainContext ? brainContextToJson(context.brainContext) : {}),
     },
   });
+  const enrichedAnalysis = context.brainContext
+    ? applyBrainEnrichmentToAnalysis(context.brainContext, aiAnalysis, messageText)
+    : aiAnalysis;
 
-  return aiAnalysisToWhatsAppIntent(aiAnalysis);
+  return aiAnalysisToWhatsAppIntent(enrichedAnalysis);
 }
 
 function whatsappIntentToAIAnalysis(intent: WhatsAppAppointmentIntent): AIAppointmentAnalysis {

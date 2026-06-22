@@ -2,28 +2,54 @@ import {
   analyzeEmailWithAI,
   buildAppointmentRequestFromIntent,
   buildCalendarConflict,
+  filterAlternativesForBrainConstraints,
+  finalizeSchedulingReplyForBrain,
   generateEmailReplyDraft,
   generateNeedMoreInfoReply,
+  resolveSchedulingEmailReplyBody,
   normalizeGmailMessage,
   normalizeGoogleCalendarEvent,
   normalizeMicrosoftCalendarEvent,
   normalizeMicrosoftMailMessage,
+  resolveBrainCalendarRules,
+  resolveRequestedAppointmentWindow,
 } from "@soreya/ai";
 import {
   cacheCalendarEvents,
   cacheIncomingEmailMessages,
   createAppointmentRequestFromEmail,
+  createCalendarActionProposal,
   createEmailReplySuggestion,
-  createSyncLog,
+  createSyncLogOptional,
   getCachedCalendarEvents,
   getConnectedCalendarAccountByProvider,
   getConnectedEmailAccountByProvider,
+  getOrganizationBrainContext,
   markAccountSyncFinished,
   markAccountSyncStarted,
   updateSyncLog,
   type SoreyaSupabaseClient,
+  type SyncLog,
 } from "@soreya/database";
 import type { ConnectedAccount } from "@soreya/shared";
+import { readMatchedServiceFromConstraints } from "@soreya/shared";
+
+import {
+  buildEmailCalendarEventDescription,
+  buildEmailCalendarEventTitle,
+} from "@/lib/server/calendar-event-draft";
+
+async function finalizeSyncLog(
+  supabase: SoreyaSupabaseClient,
+  syncLog: SyncLog | null,
+  input: Omit<Parameters<typeof updateSyncLog>[1], "syncLogId">,
+): Promise<void> {
+  if (!syncLog) {
+    return;
+  }
+
+  await updateSyncLog(supabase, { ...input, syncLogId: syncLog.id });
+}
 
 import {
   buildCalendarSyncRange,
@@ -60,7 +86,7 @@ export async function syncGoogleCalendar(supabase: SoreyaSupabaseClient, organiz
     return { provider: "google", skipped: true, error: "Google Calendar is not connected." };
   }
 
-  const syncLog = await createSyncLog(supabase, {
+  const syncLog = await createSyncLogOptional(supabase, {
     organizationId,
     provider: "google_calendar",
     jobType: "calendar_sync",
@@ -117,9 +143,8 @@ export async function syncGoogleCalendar(supabase: SoreyaSupabaseClient, organiz
     const limitedEvents = events.slice(0, maxEvents);
     const count = await cacheCalendarEvents(supabase, organizationId, account.id, limitedEvents);
     await markAccountSyncFinished(supabase, account.id, "success");
-    await updateSyncLog(supabase, {
+    await finalizeSyncLog(supabase, syncLog, {
       organizationId,
-      syncLogId: syncLog.id,
       status: "success",
       recordsRead: events.length,
       recordsCreated: count,
@@ -130,9 +155,8 @@ export async function syncGoogleCalendar(supabase: SoreyaSupabaseClient, organiz
   } catch (error) {
     const message = error instanceof Error ? error.message : "Google Calendar sync failed.";
     await markAccountSyncFinished(supabase, account.id, "failed", message);
-    await updateSyncLog(supabase, {
+    await finalizeSyncLog(supabase, syncLog, {
       organizationId,
-      syncLogId: syncLog.id,
       status: "failed",
       errorMessage: message,
     });
@@ -147,7 +171,7 @@ export async function syncMicrosoftCalendar(supabase: SoreyaSupabaseClient, orga
     return { provider: "microsoft", skipped: true, error: "Microsoft Outlook Calendar is not connected." };
   }
 
-  const syncLog = await createSyncLog(supabase, {
+  const syncLog = await createSyncLogOptional(supabase, {
     organizationId,
     provider: "microsoft_calendar",
     jobType: "calendar_sync",
@@ -208,9 +232,8 @@ export async function syncMicrosoftCalendar(supabase: SoreyaSupabaseClient, orga
     const limitedEvents = events.slice(0, maxEvents);
     const count = await cacheCalendarEvents(supabase, organizationId, account.id, limitedEvents);
     await markAccountSyncFinished(supabase, account.id, "success");
-    await updateSyncLog(supabase, {
+    await finalizeSyncLog(supabase, syncLog, {
       organizationId,
-      syncLogId: syncLog.id,
       status: "success",
       recordsRead: events.length,
       recordsCreated: count,
@@ -221,9 +244,8 @@ export async function syncMicrosoftCalendar(supabase: SoreyaSupabaseClient, orga
   } catch (error) {
     const message = error instanceof Error ? error.message : "Microsoft Calendar sync failed.";
     await markAccountSyncFinished(supabase, account.id, "failed", message);
-    await updateSyncLog(supabase, {
+    await finalizeSyncLog(supabase, syncLog, {
       organizationId,
-      syncLogId: syncLog.id,
       status: "failed",
       errorMessage: message,
     });
@@ -238,7 +260,7 @@ export async function syncGmail(supabase: SoreyaSupabaseClient, organizationId: 
     return { provider: "gmail", skipped: true, error: "Gmail is not connected." };
   }
 
-  const syncLog = await createSyncLog(supabase, {
+  const syncLog = await createSyncLogOptional(supabase, {
     organizationId,
     provider: "gmail",
     jobType: "email_sync",
@@ -301,9 +323,8 @@ export async function syncGmail(supabase: SoreyaSupabaseClient, organizationId: 
     const analyzedCount = await cacheIncomingEmailMessages(supabase, organizationId, account.id, messages);
     const processing = await analyzeAppointmentEmails(supabase, organizationId, timezone, messages, "gmail");
     await markAccountSyncFinished(supabase, account.id, "success");
-    await updateSyncLog(supabase, {
+    await finalizeSyncLog(supabase, syncLog, {
       organizationId,
-      syncLogId: syncLog.id,
       status: "success",
       recordsRead: messageRefs.length,
       recordsCreated: analyzedCount + processing.appointmentRequests + processing.suggestedActions,
@@ -321,9 +342,8 @@ export async function syncGmail(supabase: SoreyaSupabaseClient, organizationId: 
   } catch (error) {
     const message = error instanceof Error ? error.message : "Gmail sync failed.";
     await markAccountSyncFinished(supabase, account.id, "failed", message);
-    await updateSyncLog(supabase, {
+    await finalizeSyncLog(supabase, syncLog, {
       organizationId,
-      syncLogId: syncLog.id,
       status: "failed",
       errorMessage: message,
     });
@@ -338,7 +358,7 @@ export async function syncMicrosoftMail(supabase: SoreyaSupabaseClient, organiza
     return { provider: "microsoft", skipped: true, error: "Microsoft Outlook Mail is not connected." };
   }
 
-  const syncLog = await createSyncLog(supabase, {
+  const syncLog = await createSyncLogOptional(supabase, {
     organizationId,
     provider: "microsoft_mail",
     jobType: "email_sync",
@@ -397,9 +417,8 @@ export async function syncMicrosoftMail(supabase: SoreyaSupabaseClient, organiza
     const analyzedCount = await cacheIncomingEmailMessages(supabase, organizationId, account.id, messages);
     const processing = await analyzeAppointmentEmails(supabase, organizationId, timezone, messages, "microsoft");
     await markAccountSyncFinished(supabase, account.id, "success");
-    await updateSyncLog(supabase, {
+    await finalizeSyncLog(supabase, syncLog, {
       organizationId,
-      syncLogId: syncLog.id,
       status: "success",
       recordsRead: messagesRaw.length,
       recordsCreated: analyzedCount + processing.appointmentRequests + processing.suggestedActions,
@@ -417,9 +436,8 @@ export async function syncMicrosoftMail(supabase: SoreyaSupabaseClient, organiza
   } catch (error) {
     const message = error instanceof Error ? error.message : "Microsoft Mail sync failed.";
     await markAccountSyncFinished(supabase, account.id, "failed", message);
-    await updateSyncLog(supabase, {
+    await finalizeSyncLog(supabase, syncLog, {
       organizationId,
-      syncLogId: syncLog.id,
       status: "failed",
       errorMessage: message,
     });
@@ -427,7 +445,7 @@ export async function syncMicrosoftMail(supabase: SoreyaSupabaseClient, organiza
   }
 }
 
-async function analyzeAppointmentEmails(
+export async function analyzeAppointmentEmails(
   supabase: SoreyaSupabaseClient,
   organizationId: string,
   timezone: string,
@@ -435,44 +453,79 @@ async function analyzeAppointmentEmails(
   provider: "gmail" | "microsoft",
 ) {
   const calendarRange = calendarLookaheadRange();
-  const calendarEvents = await getCachedCalendarEvents(supabase, organizationId, calendarRange.start, calendarRange.end);
+  const [calendarEvents, brainContext] = await Promise.all([
+    getCachedCalendarEvents(supabase, organizationId, calendarRange.start, calendarRange.end),
+    getOrganizationBrainContext(supabase, organizationId),
+  ]);
   let appointmentRequests = 0;
   let suggestedActions = 0;
 
   for (const message of messages) {
-    const intent = await analyzeEmailWithAI(message, { timezone });
+    const intent = await analyzeEmailWithAI(message, { timezone, brainContext });
 
     if (!intent.isAppointmentRequest) {
       continue;
     }
 
     const requestDraft = buildAppointmentRequestFromIntent(message, intent);
-    const conflict = intent.requestedStartsAt && intent.requestedEndsAt
-      ? buildCalendarConflict(calendarEvents, {}, intent.requestedStartsAt, intent.requestedEndsAt)
+    const calendarRules = resolveBrainCalendarRules(intent.extractedConstraints);
+    const appointmentWindow = resolveRequestedAppointmentWindow(
+      intent.requestedStartsAt,
+      intent.requestedEndsAt,
+      intent.extractedConstraints,
+    );
+    const conflict = appointmentWindow.startsAt && appointmentWindow.endsAt
+      ? buildCalendarConflict(
+        calendarEvents,
+        calendarRules,
+        appointmentWindow.startsAt,
+        appointmentWindow.endsAt,
+      )
       : null;
+    const previousAlternativeCount = conflict?.alternatives.length ?? 0;
+    const alternatives = filterAlternativesForBrainConstraints(
+      conflict?.alternatives ?? [],
+      intent.extractedConstraints,
+    );
+    const finalizedIntent = finalizeSchedulingReplyForBrain(intent, alternatives, {
+      customerText: [message.subject, message.snippet, message.bodyText].filter(Boolean).join(" "),
+      previousAlternativeCount,
+    });
     const appointmentRequest = await createAppointmentRequestFromEmail(supabase, {
       organizationId,
       message,
-      intent,
+      intent: finalizedIntent,
       conflictDetected: Boolean(conflict?.conflictingEvents.length),
       conflictReason: conflict?.conflictingEvents.length ? "Requested time overlaps cached calendar events." : null,
-      alternatives: conflict?.alternatives ?? [],
+      alternatives,
     });
     appointmentRequests += 1;
 
-    const reply = intent.needsMoreInfo
-      ? generateNeedMoreInfoReply(message, ["preferred date", "preferred time"])
-      : generateEmailReplyDraft(message, requestDraft, conflict);
+    const reply = finalizedIntent.needsMoreInfo
+      ? generateNeedMoreInfoReply(message, finalizedIntent.missingFields ?? ["date/time"])
+      : generateEmailReplyDraft(
+        message,
+        requestDraft,
+        conflict ? { ...conflict, alternatives } : null,
+      );
+
+    const replyBody = resolveSchedulingEmailReplyBody(reply.body, finalizedIntent.suggestedReplyBody);
 
     await createEmailReplySuggestion(supabase, {
       organizationId,
       provider,
       messageId: message.providerMessageId,
+      threadId: message.providerThreadId,
       subject: reply.subject,
-      body: intent.suggestedReplyBody ?? reply.body,
+      body: replyBody,
       recipient: reply.recipient,
       appointmentRequestId: appointmentRequest.id,
-      actionType: intent.needsMoreInfo ? "ask_email_more_info" : "send_email_reply",
+      actionType: finalizedIntent.needsMoreInfo ? "ask_email_more_info" : "send_email_reply",
+      rationale: /[àèéìòù]|buongiorno|grazie|appuntamento/i.test(
+        [message.subject, message.bodyText, message.snippet].filter(Boolean).join(" "),
+      )
+        ? "Bozza di risposta email in attesa di approvazione esplicita."
+        : "Email reply suggestion awaiting explicit user approval.",
       metadata: {
         aiProvider: intent.aiProvider ?? "heuristic",
         aiModel: intent.aiModel ?? null,
@@ -483,6 +536,55 @@ async function analyzeAppointmentEmails(
       },
     });
     suggestedActions += 1;
+
+    if (
+      !finalizedIntent.needsMoreInfo
+      && appointmentWindow.startsAt
+      && appointmentWindow.endsAt
+      && !(conflict?.conflictingEvents.length)
+    ) {
+      const matchedService = readMatchedServiceFromConstraints(finalizedIntent.extractedConstraints);
+
+      await createCalendarActionProposal(supabase, {
+        organizationId,
+        provider: "google",
+        actionType: "create_calendar_event",
+        appointmentRequestId: appointmentRequest.id,
+        title: buildEmailCalendarEventTitle({
+          customerName: message.fromName,
+          serviceName: matchedService?.name ?? null,
+          subject: message.subject,
+        }),
+        rationale: /[àèéìòù]|buongiorno|grazie|appuntamento/i.test(
+          [message.subject, message.bodyText, message.snippet].filter(Boolean).join(" "),
+        )
+          ? "Proposta di appuntamento in calendario in attesa di approvazione esplicita."
+          : "Calendar appointment proposal awaiting explicit user approval.",
+        riskLevel: "high",
+        payload: {
+          startsAt: appointmentWindow.startsAt,
+          endsAt: appointmentWindow.endsAt,
+          timezone,
+          title: buildEmailCalendarEventTitle({
+            customerName: message.fromName,
+            serviceName: matchedService?.name ?? null,
+            subject: message.subject,
+          }),
+          description: buildEmailCalendarEventDescription({
+            customerName: message.fromName,
+            customerEmail: message.fromEmail,
+            subject: message.subject,
+            messageSnippet: message.snippet,
+          }),
+          customerName: message.fromName,
+          customerEmail: message.fromEmail,
+          source: "email",
+          messageId: message.providerMessageId,
+          appointmentRequestId: appointmentRequest.id,
+        },
+      });
+      suggestedActions += 1;
+    }
   }
 
   return { appointmentRequests, suggestedActions };

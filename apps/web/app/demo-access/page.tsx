@@ -69,8 +69,8 @@ export default async function DemoAccessPage({ searchParams }: DemoAccessPagePro
   }
 
   return (
-    <main className="flex min-h-screen items-center bg-[#f7f6f2] px-5 py-10 text-stone-950">
-      <section className="mx-auto w-full max-w-md rounded-lg border border-stone-200 bg-white p-6 shadow-sm">
+    <main className="flex min-h-screen items-center soreya-page px-5 py-10 text-stone-950">
+      <section className="mx-auto w-full max-w-md soreya-card p-6 shadow-sm">
         <Link className="text-lg font-semibold tracking-normal text-stone-950" href="/">
           Soreya
         </Link>
@@ -79,7 +79,7 @@ export default async function DemoAccessPage({ searchParams }: DemoAccessPagePro
 
         <DemoAccessForm copy={copy} disabled={isMissingProductionConfig} nextPath={nextPath} />
 
-        <p className="mt-6 rounded-md border border-emerald-200 bg-emerald-50 p-3 text-sm leading-6 text-emerald-950">
+        <p className="mt-6 rounded-md border border-[var(--trust-border)] bg-[var(--trust-soft)] p-3 text-sm leading-6 text-emerald-950">
           {copy.safety}
         </p>
         <Link className="mt-5 inline-flex text-sm font-medium text-stone-600 hover:text-stone-950" href="/">

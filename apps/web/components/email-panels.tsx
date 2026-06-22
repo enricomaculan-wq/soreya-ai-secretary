@@ -7,7 +7,8 @@ import {
   getUserOrganization,
 } from "@soreya/database";
 import type { EmailConnectionStatus, NormalizedEmailMessage, SuggestedAction } from "@soreya/shared";
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
+import { useSearchParams } from "next/navigation";
 
 import { getWebDemoData, shouldUseWebDemoData } from "@/lib/demo-data";
 import { useI18n } from "@/lib/i18n";
@@ -39,12 +40,28 @@ const PROVIDERS: Array<{
   },
 ];
 
-export function EmailAccountsPanel() {
+export function EmailAccountsPanel({ providers, compact = false }: { providers?: EmailProvider[]; compact?: boolean } = {}) {
   const { locale, t, label } = useI18n();
+  const searchParams = useSearchParams();
   const [statuses, setStatuses] = useState<EmailConnectionStatus[]>([]);
   const [message, setMessage] = useState<string | null>(null);
   const [isLoading, setIsLoading] = useState(true);
   const [syncingProvider, setSyncingProvider] = useState<EmailProvider | null>(null);
+
+  const oauthMessage = useMemo(() => {
+    const emailResult = searchParams.get("email");
+    const oauthError = searchParams.get("error");
+
+    if (emailResult === "gmail-connected") {
+      return t("email.gmailConnected");
+    }
+
+    if (emailResult === "gmail-error" && oauthError) {
+      return oauthError;
+    }
+
+    return null;
+  }, [searchParams, t]);
 
   const loadStatuses = useCallback(async () => {
     setMessage(null);
@@ -93,7 +110,7 @@ export function EmailAccountsPanel() {
 
   useEffect(() => {
     void Promise.resolve().then(loadStatuses);
-  }, [loadStatuses]);
+  }, [loadStatuses, searchParams]);
 
   async function syncNow(provider: EmailProvider, syncHref: string) {
     setSyncingProvider(provider);
@@ -135,13 +152,49 @@ export function EmailAccountsPanel() {
 
   return (
     <div className="space-y-4">
-      {PROVIDERS.map((provider) => {
+      {(providers ? PROVIDERS.filter((provider) => providers.includes(provider.provider)) : PROVIDERS).map((provider) => {
         const status = statuses.find((candidate) => candidate.provider === provider.provider);
         const connected = Boolean(status?.connected);
         const demoMode = shouldUseWebDemoData();
+        const isGoogle = provider.provider === "gmail";
+
+        if (compact) {
+          return (
+            <div key={provider.provider} className="space-y-3">
+              <p className="text-sm text-stone-600">
+                {connected
+                  ? isGoogle
+                    ? t("settings.hub.channels.emailGoogle.connected", { email: status?.email ?? "—" })
+                    : t("settings.hub.channels.connectedAs", { value: status?.email ?? "—" })
+                  : isGoogle
+                    ? t("settings.hub.channels.emailGoogle.disconnected")
+                    : t("settings.hub.channels.menu.email-microsoftHint")}
+              </p>
+              <div className="flex flex-wrap gap-2">
+                {demoMode ? (
+                  <button className="rounded-md border border-stone-300 bg-stone-100 px-4 py-2 text-sm font-medium text-stone-500" disabled type="button">
+                    {t("demo.badge")}
+                  </button>
+                ) : (
+                  <a className="soreya-btn-primary px-4 py-2 text-sm" href={provider.connectHref}>
+                    {isGoogle ? t("settings.hub.channels.emailGoogle.connect") : t("common.connect")}
+                  </a>
+                )}
+                <button
+                  className="soreya-btn-secondary px-4 py-2 text-sm disabled:cursor-not-allowed disabled:opacity-50"
+                  disabled={!connected || syncingProvider === provider.provider}
+                  onClick={() => syncNow(provider.provider, provider.syncHref)}
+                  type="button"
+                >
+                  {syncingProvider === provider.provider ? `${t("common.loading")}...` : t("settings.hub.channels.emailGoogle.syncNow")}
+                </button>
+              </div>
+            </div>
+          );
+        }
 
         return (
-          <div key={provider.provider} className="rounded-lg border border-stone-200 bg-white p-5 shadow-sm">
+          <div key={provider.provider} className="soreya-card p-5 shadow-sm">
             <div className="flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
               <div>
                 <h3 className="text-base font-semibold tracking-normal text-stone-950">{provider.title}</h3>
@@ -184,6 +237,10 @@ export function EmailAccountsPanel() {
           </div>
         );
       })}
+
+      {oauthMessage ? (
+        <p className="rounded-md border border-amber-200 bg-amber-50 p-3 text-sm text-amber-900">{oauthMessage}</p>
+      ) : null}
 
       {message ? (
         <p className="rounded-md border border-stone-200 bg-stone-50 p-3 text-sm text-stone-700">{message}</p>
@@ -467,7 +524,7 @@ function EmptyState({
   why?: string;
 }) {
   return (
-    <div className="mt-5 rounded-lg border border-stone-200 bg-stone-50 p-5">
+    <div className="mt-5 soreya-card-muted p-5">
       <p className="text-sm font-medium text-stone-950">{title}</p>
       <p className="mt-1 text-sm text-stone-500">{detail}</p>
       {why ? <p className="mt-3 text-sm leading-6 text-stone-600">{why}</p> : null}

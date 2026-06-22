@@ -2,7 +2,7 @@ import { z } from "zod";
 
 import { jsonError } from "@/lib/server/approvals-api";
 import { executeSuggestedAction } from "@/lib/server/execution-engine";
-import { checkRateLimit, rateLimitResponse } from "@/lib/server/rate-limit";
+import { checkRateLimitAsync, rateLimitResponse } from "@/lib/server/rate-limit";
 import { getAuthenticatedServerContext } from "@/lib/server/supabase";
 
 const executeSchema = z.object({
@@ -12,7 +12,7 @@ const executeSchema = z.object({
 
 export async function POST(request: Request) {
   try {
-    const rateLimit = checkRateLimit(request, { route: "/api/execution/execute", limit: 20 });
+    const rateLimit = await checkRateLimitAsync(request, { route: "/api/execution/execute", limit: 20 });
 
     if (!rateLimit.allowed) {
       return rateLimitResponse(rateLimit);

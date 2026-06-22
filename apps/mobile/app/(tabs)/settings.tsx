@@ -19,6 +19,7 @@ import type {
 import { useEffect, useState } from 'react';
 import { Pressable, StyleSheet, Switch, Text, View } from 'react-native';
 
+import { BrainSettingsPanel } from '@/components/brain-settings-panel';
 import { useSoreyaAuth } from '@/components/mobile-auth-gate';
 import { DataRow, Section, SoreyaScreen } from '@/components/soreya-screen';
 import {
@@ -30,7 +31,9 @@ import {
 } from '@/lib/notifications';
 import { getMobileDemoData, shouldUseMobileDemoData } from '@/lib/demo-data';
 import { useI18n } from '@/lib/i18n';
+import { readMobilePresentationMode, writeMobilePresentationMode } from '@/lib/presentation-mode';
 import { getSupabaseMobileClient, hasSupabaseMobileConfig } from '@/lib/supabase';
+import { getWebAppUrl, shouldUseMobileWebApi } from '@/lib/web-api';
 
 const hasSupabaseConfig = hasSupabaseMobileConfig();
 
@@ -97,6 +100,26 @@ export default function SettingsScreen() {
   const [watchMessage, setWatchMessage] = useState<string | null>(null);
   const [savingWatchKey, setSavingWatchKey] = useState<keyof WatchPreferencesForm | null>(null);
   const demoMode = shouldUseMobileDemoData();
+  const [presentationMode, setPresentationMode] = useState(false);
+  const webAppUrl = getWebAppUrl();
+  const usesWebApi = shouldUseMobileWebApi();
+
+  useEffect(() => {
+    let isMounted = true;
+
+    async function loadPresentationMode() {
+      const enabled = await readMobilePresentationMode();
+      if (isMounted) {
+        setPresentationMode(enabled);
+      }
+    }
+
+    void loadPresentationMode();
+
+    return () => {
+      isMounted = false;
+    };
+  }, []);
 
   useEffect(() => {
     let isMounted = true;
@@ -331,6 +354,24 @@ export default function SettingsScreen() {
         </View>
       </Section>
 
+      {demoMode ? (
+        <Section title={t('demo.presentationModeTitle')}>
+          <View style={styles.presentationRow}>
+            <View style={styles.presentationCopy}>
+              <Text style={styles.presentationTitle}>{t('demo.presentationModeTitle')}</Text>
+              <Text style={styles.presentationDetail}>{t('demo.presentationModeDetail')}</Text>
+            </View>
+            <Switch
+              value={presentationMode}
+              onValueChange={(value) => {
+                setPresentationMode(value);
+                void writeMobilePresentationMode(value);
+              }}
+            />
+          </View>
+        </Section>
+      ) : null}
+
       <Section title={t('settings.systemStatus')}>
         <DataRow
           title={t('settings.demoData')}
@@ -343,6 +384,16 @@ export default function SettingsScreen() {
           detail="EXPO_PUBLIC_SUPABASE_URL / EXPO_PUBLIC_SUPABASE_ANON_KEY"
           badge={demoMode ? t('common.demoMode') : hasSupabaseConfig ? t('common.ready') : t('common.missing')}
           badgeTone={hasSupabaseConfig || demoMode ? 'success' : 'warning'}
+        />
+        <DataRow
+          title={t('mobile.settings.webApi')}
+          detail={
+            usesWebApi && webAppUrl
+              ? t('mobile.settings.webApiConfigured', { url: webAppUrl })
+              : t('mobile.settings.webApiMissing')
+          }
+          badge={usesWebApi ? t('common.ready') : t('common.missing')}
+          badgeTone={usesWebApi ? 'success' : 'warning'}
         />
         <DataRow
           title={t('common.dryRunMode')}
@@ -487,6 +538,10 @@ export default function SettingsScreen() {
         </Pressable>
       </Section>
 
+      <Section title={t('navigation.brain')}>
+        <BrainSettingsPanel role={userOrganization?.membership.role} />
+      </Section>
+
       <Section title={t('settings.rules')}>
         <DataRow title={t('settings.rules')} detail={t('safety.approvalFirst')} badge="0" />
       </Section>
@@ -529,8 +584,8 @@ function ToggleRow({
         disabled={disabled}
         value={value}
         onValueChange={onValueChange}
-        trackColor={{ false: '#d6d3d1', true: '#a7f3d0' }}
-        thumbColor={value ? '#047857' : '#f5f5f4'}
+        trackColor={{ false: '#e8e8e8', true: '#99f6e4' }}
+        thumbColor={value ? '#0d9488' : '#f5f5f4'}
       />
     </View>
   );
@@ -610,26 +665,46 @@ const styles = StyleSheet.create({
   signOutButton: {
     alignItems: 'center',
     backgroundColor: '#ffffff',
-    borderColor: '#d6d3d1',
+    borderColor: '#e8e8e8',
     borderRadius: 8,
     borderWidth: 1,
     justifyContent: 'center',
     minHeight: 46,
   },
   signOutText: {
-    color: '#44403c',
+    color: '#525252',
     fontSize: 15,
     fontWeight: '700',
   },
   secondaryButton: {
     alignItems: 'center',
     backgroundColor: '#ffffff',
-    borderColor: '#d6d3d1',
+    borderColor: '#e8e8e8',
     borderRadius: 8,
     borderWidth: 1,
     justifyContent: 'center',
     marginTop: 10,
     minHeight: 46,
+  },
+  presentationRow: {
+    alignItems: 'center',
+    flexDirection: 'row',
+    gap: 12,
+    justifyContent: 'space-between',
+  },
+  presentationCopy: {
+    flex: 1,
+    gap: 4,
+  },
+  presentationTitle: {
+    color: '#171717',
+    fontSize: 14,
+    fontWeight: '700',
+  },
+  presentationDetail: {
+    color: '#78716c',
+    fontSize: 13,
+    lineHeight: 18,
   },
   languageRow: {
     flexDirection: 'row',
@@ -639,7 +714,7 @@ const styles = StyleSheet.create({
   languageButton: {
     alignItems: 'center',
     backgroundColor: '#ffffff',
-    borderColor: '#d6d3d1',
+    borderColor: '#e8e8e8',
     borderRadius: 8,
     borderWidth: 1,
     minHeight: 42,
@@ -647,25 +722,25 @@ const styles = StyleSheet.create({
     paddingHorizontal: 14,
   },
   languageButtonActive: {
-    backgroundColor: '#ecfdf5',
-    borderColor: '#a7f3d0',
+    backgroundColor: '#f0fdfa',
+    borderColor: '#99f6e4',
   },
   languageButtonText: {
-    color: '#44403c',
+    color: '#525252',
     fontSize: 14,
     fontWeight: '700',
   },
   languageButtonTextActive: {
-    color: '#047857',
+    color: '#0d9488',
   },
   toggleDetail: {
-    color: '#78716c',
+    color: '#737373',
     fontSize: 13,
     lineHeight: 18,
   },
   toggleRow: {
     alignItems: 'center',
-    borderTopColor: '#e7e5e4',
+    borderTopColor: '#e8e8e8',
     borderTopWidth: 1,
     flexDirection: 'row',
     gap: 12,
@@ -677,7 +752,7 @@ const styles = StyleSheet.create({
     gap: 4,
   },
   toggleTitle: {
-    color: '#1c1917',
+    color: '#171717',
     fontSize: 15,
     fontWeight: '700',
   },

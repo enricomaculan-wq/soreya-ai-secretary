@@ -87,7 +87,7 @@ export async function persistEmergencyPlan(
     organizationId: input.organizationId,
     createdBy: input.userId,
     type: input.request.type,
-    status: "draft",
+    status: "pending_approval",
     reason: input.request.reason,
     targetDate: input.request.targetDate,
     delayMinutes: input.request.delayMinutes ?? null,

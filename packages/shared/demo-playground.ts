@@ -9,6 +9,7 @@ export type DemoDetectedIntent =
   | "delay_notice"
   | "cancel_appointment"
   | "appointment_lookup"
+  | "appointment_confirmation"
   | "callback_request"
   | "manual_review";
 
@@ -114,6 +115,14 @@ export type DemoCustomerRequestAnalysis = DemoCustomerRequestInput & {
     | "propose_reschedule"
     | "approve_reply"
     | "manual_review";
+  requiresOperatorAttention?: boolean;
+  operatorAttentionCategory?:
+    | "billing"
+    | "complaint"
+    | "medical_advice"
+    | "certificate"
+    | "general"
+    | null;
   safetyNotes: string[];
   demoSuggestedAction: SuggestedActionType;
   aiProvider: "openai" | "heuristic";
@@ -492,6 +501,12 @@ function buildSuggestedReplyFromAnalysis(analysis: DemoCustomerRequestAnalysis):
     });
   }
 
+  if (analysis.detectedIntent === "appointment_confirmation") {
+    return translate(dictionary, "demoPlayground.engine.replies.appointmentConfirmation", {
+      confirmedTime: requestedTime,
+    });
+  }
+
   if (analysis.conflictDetected) {
     return translate(dictionary, "demoPlayground.engine.replies.appointmentConflict", {
       requestedTime,
@@ -689,6 +704,7 @@ function calculateConfidence(
     delay_notice: 0.92,
     cancel_appointment: 0.9,
     appointment_lookup: 0.92,
+    appointment_confirmation: 0.95,
     callback_request: 0.8,
     manual_review: 0.38,
   };
@@ -1093,4 +1109,253 @@ function isDemoAnalysis(input: DemoCustomerRequestInput | DemoCustomerRequestAna
 
 function makeDemoId(prefix: string) {
   return `${prefix}-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+}
+
+const GENERIC_DEMO_PATIENT_NAMES = new Set([
+  "cliente",
+  "customer",
+  "paziente",
+  "patient",
+  "cliente whatsapp",
+  "cliente email",
+  "cliente da telefonata",
+  "whatsapp customer",
+  "email customer",
+  "phone call customer",
+]);
+
+export function isGenericDemoPatientName(value: string | null | undefined) {
+  if (!value?.trim()) {
+    return true;
+  }
+
+  const normalized = value
+    .trim()
+    .toLowerCase()
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "");
+
+  return GENERIC_DEMO_PATIENT_NAMES.has(normalized);
+}
+
+export function resolveDemoPatientFirstName(...names: Array<string | null | undefined>) {
+  for (const name of names) {
+    if (!name?.trim() || isGenericDemoPatientName(name)) {
+      continue;
+    }
+
+    const firstName = name.trim().split(/\s+/)[0] ?? null;
+
+    if (firstName && !isGenericDemoPatientName(firstName)) {
+      return firstName;
+    }
+  }
+
+  return null;
+}
+
+export type DemoAppointmentConfirmationFollowUp = {
+  originalRequestText: string;
+  confirmedTimeHint: string | null;
+  lastStudioReply: string;
+};
+
+const DEMO_PATIENT_CONFIRMATION_PATTERNS = [
+  /\bok\b/i,
+  /\bokay\b/i,
+  /\bs[ìi]\b/i,
+  /\byes\b/i,
+  /\bperfetto\b/i,
+  /\bva bene\b/i,
+  /\bd['’]?accordo\b/i,
+  /\bconfermo\b/i,
+  /\bconfermato\b/i,
+  /\bottimo\b/i,
+  /\bbenissimo\b/i,
+];
+
+const DEMO_NEW_REQUEST_FOLLOW_UP_PATTERNS = [
+  /\bvorrei\b/i,
+  /\bposso\b/i,
+  /\bpossiamo\b/i,
+  /\bspost/i,
+  /\bannull/i,
+  /\bquanto costa\b/i,
+  /\bpreventivo\b/i,
+  /\bchiedo\b/i,
+  /\bdisponibil/i,
+];
+
+export function detectDemoCustomerGreeting(text: string): "morning" | "evening" | "informal" | null {
+  const normalized = text
+    .trim()
+    .toLowerCase()
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "");
+
+  if (/\b(buongiorno|good morning)\b/.test(normalized)) {
+    return "morning";
+  }
+
+  if (/\b(buonasera|good afternoon|good evening)\b/.test(normalized)) {
+    return "evening";
+  }
+
+  if (/\b(ciao|salve|hello|hi)\b/.test(normalized)) {
+    return "informal";
+  }
+
+  return null;
+}
+
+export function formatDemoStudioGreeting(
+  tone: "morning" | "evening" | "informal" | null,
+  firstName: string | null,
+  locale: SupportedLocale | string,
+): string {
+  const isItalian = resolveLocale(locale) === "it";
+
+  if (tone === "morning") {
+    return firstName
+      ? isItalian
+        ? `Buongiorno ${firstName},`
+        : `Good morning ${firstName},`
+      : isItalian
+        ? "Buongiorno,"
+        : "Good morning,";
+  }
+
+  if (tone === "evening") {
+    return firstName
+      ? isItalian
+        ? `Buonasera ${firstName},`
+        : `Good afternoon ${firstName},`
+      : isItalian
+        ? "Buonasera,"
+        : "Good afternoon,";
+  }
+
+  if (tone === "informal") {
+    return firstName
+      ? isItalian
+        ? `Ciao ${firstName},`
+        : `Hi ${firstName},`
+      : isItalian
+        ? "Ciao,"
+        : "Hi,";
+  }
+
+  return firstName
+    ? isItalian
+      ? `Certo ${firstName},`
+      : `Sure ${firstName},`
+    : isItalian
+      ? "Certo,"
+      : "Sure,";
+}
+
+export function alignDemoReplyWithCustomerGreeting(
+  reply: string,
+  customerText: string,
+  firstName: string | null,
+  locale: SupportedLocale | string,
+) {
+  const tone = detectDemoCustomerGreeting(customerText);
+  if (!tone) {
+    return reply;
+  }
+
+  const greeting = formatDemoStudioGreeting(tone, firstName, locale);
+  const isItalian = resolveLocale(locale) === "it";
+  const withName = isItalian
+    ? /^(?:Certo|Buongiorno|Buonasera|Ciao|Perfetto|Sure|Good morning|Good afternoon|Hi|Hello)\s+([^,\n]+),/i
+    : /^(?:Sure|Good morning|Good afternoon|Hi|Hello|Perfect)\s+([^,\n]+),/i;
+  const generic = isItalian
+    ? /^(?:Certo|Buongiorno|Buonasera|Ciao),/i
+    : /^(?:Sure|Good morning|Good afternoon|Hi|Hello),/i;
+
+  if (firstName && withName.test(reply)) {
+    return reply.replace(withName, `${greeting}`);
+  }
+
+  if (generic.test(reply)) {
+    return reply.replace(generic, `${greeting}`);
+  }
+
+  return reply;
+}
+
+export function isDemoPatientConfirmationText(text: string) {
+  if (!text.trim()) {
+    return false;
+  }
+
+  const normalized = text.trim().toLowerCase();
+  if (DEMO_NEW_REQUEST_FOLLOW_UP_PATTERNS.some((pattern) => pattern.test(normalized))) {
+    return false;
+  }
+
+  return DEMO_PATIENT_CONFIRMATION_PATTERNS.some((pattern) => pattern.test(normalized));
+}
+
+export function isDemoNewRequestFollowUpText(text: string) {
+  const normalized = text.trim().toLowerCase();
+  return DEMO_NEW_REQUEST_FOLLOW_UP_PATTERNS.some((pattern) => pattern.test(normalized));
+}
+
+export function extractDemoConfirmedTimeHint(latestMessage: string, studioReply: string) {
+  const normalized = latestMessage.trim();
+
+  const withMinutes =
+    normalized.match(/\b(?:alle?|at)\s*(\d{1,2})[:.](\d{2})\b/i) ??
+    normalized.match(/\b(\d{1,2})[:.](\d{2})\b/);
+  if (withMinutes?.[1] && withMinutes[2]) {
+    return `${withMinutes[1]}:${withMinutes[2]}`;
+  }
+
+  const hourOnly = normalized.match(/\b(?:alle?|at)\s+(\d{1,2})\b(?!\s*[:.])/i);
+  if (hourOnly?.[1]) {
+    return `${hourOnly[1]}:00`;
+  }
+
+  const studioTimes = studioReply.match(/\b\d{1,2}[:.]\d{2}\b/g) ?? [];
+  if (studioTimes.length === 1) {
+    return studioTimes[0].replace(".", ":");
+  }
+
+  return null;
+}
+
+export function detectDemoAppointmentConfirmationFollowUp(
+  history: Array<{ role: "customer" | "studio"; body: string }>,
+  latestMessage: string,
+): DemoAppointmentConfirmationFollowUp | null {
+  const latest = latestMessage.trim();
+  if (!latest || history.length === 0) {
+    return null;
+  }
+
+  const lastStudio = [...history].reverse().find((entry) => entry.role === "studio");
+  if (!lastStudio) {
+    return null;
+  }
+
+  const studioOfferedScheduling =
+    /(disponibilit|quale orario|which (one|time)|preferisc|preferisce|proporr|first available|prima disponibilit|ho controllato l.?agenda|i checked the calendar)/i.test(
+      lastStudio.body,
+    );
+  if (!studioOfferedScheduling) {
+    return null;
+  }
+
+  if (!isDemoPatientConfirmationText(latest)) {
+    return null;
+  }
+
+  const firstCustomer = history.find((entry) => entry.role === "customer")?.body ?? latest;
+  return {
+    originalRequestText: firstCustomer,
+    confirmedTimeHint: extractDemoConfirmedTimeHint(latest, lastStudio.body),
+    lastStudioReply: lastStudio.body,
+  };
 }

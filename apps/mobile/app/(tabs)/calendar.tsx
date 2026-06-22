@@ -8,7 +8,7 @@ import { getMobileDemoData, shouldUseMobileDemoData } from '@/lib/demo-data';
 import { useI18n } from '@/lib/i18n';
 import { getSupabaseMobileClient, hasSupabaseMobileConfig } from '@/lib/supabase';
 
-const dayParts = ['Morning', 'Afternoon', 'Evening'] as const;
+const dayPartKeys = ['calendar.dayPartMorning', 'calendar.dayPartAfternoon', 'calendar.dayPartEvening'] as const;
 
 export default function CalendarScreen() {
   const { locale, t, label } = useI18n();
@@ -80,7 +80,7 @@ export default function CalendarScreen() {
   const connectedCount = statuses.filter((status) => status.connected).length;
 
   return (
-    <SoreyaScreen eyebrow="Availability" title={t('calendar.title')}>
+    <SoreyaScreen eyebrow={t('calendar.availabilityEyebrow')} title={t('calendar.title')}>
       <MetricGrid>
         <MetricTile label={t('calendar.cachedEvents')} value={String(events.length)} detail={t('calendar.nextSevenDays')} />
         <MetricTile label={t('calendar.conflicts')} value="0" detail={t('dashboard.needsReview')} />
@@ -121,10 +121,10 @@ export default function CalendarScreen() {
         </Section>
       ) : (
         <Section title={t('dashboard.eyebrow')}>
-          {dayParts.map((part) => (
+          {dayPartKeys.map((partKey) => (
             <DataRow
-              key={part}
-              title={part}
+              key={partKey}
+              title={t(partKey)}
               detail={connectedCount > 0 ? t('calendar.noCachedEvents') : t('calendar.connectFromWeb')}
               badge={t('common.open')}
               badgeTone="neutral"

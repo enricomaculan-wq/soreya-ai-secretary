@@ -314,5 +314,9 @@ function toSyncProvider(provider: ConnectedAccount["provider"]): SyncProvider {
     return "whatsapp";
   }
 
+  if (provider === "website_form" || provider === "website_chat") {
+    return "gmail";
+  }
+
   return provider;
 }

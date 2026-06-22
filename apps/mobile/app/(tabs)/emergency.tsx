@@ -29,7 +29,9 @@ import { useSoreyaAuth } from '@/components/mobile-auth-gate';
 import { DataRow, Section, SoreyaScreen, StatusBadge } from '@/components/soreya-screen';
 import { getMobileDemoData, shouldUseMobileDemoData } from '@/lib/demo-data';
 import { useI18n } from '@/lib/i18n';
+import { translateMobileError } from '@/lib/mobile-errors';
 import { getSupabaseMobileClient, hasSupabaseMobileConfig } from '@/lib/supabase';
+import { postWebApi, shouldUseMobileWebApi } from '@/lib/web-api';
 
 type EmergencyPlanPreview = Omit<EmergencyModeResult, 'suggestedActions'> & {
   suggestedActions: EmergencySuggestedActionDraft[];
@@ -54,25 +56,37 @@ type QuickAction = {
 
 const quickActions: QuickAction[] = [
   {
-    titleKey: 'emergency.healthReschedule',
+    titleKey: 'labels.emergencyActionTypes.reschedule_all_today',
     detailKey: 'labels.emergencyActionTypes.reschedule_all_today',
     type: 'reschedule_all_today',
     targetWindow: 'all_day',
   },
   {
-    titleKey: 'emergency.delayNotice',
+    titleKey: 'labels.emergencyActionTypes.reschedule_morning',
+    detailKey: 'labels.emergencyActionTypes.reschedule_morning',
+    type: 'reschedule_morning',
+    targetWindow: 'morning',
+  },
+  {
+    titleKey: 'labels.emergencyActionTypes.reschedule_afternoon',
+    detailKey: 'labels.emergencyActionTypes.reschedule_afternoon',
+    type: 'reschedule_afternoon',
+    targetWindow: 'afternoon',
+  },
+  {
+    titleKey: 'labels.emergencyActionTypes.notify_delay',
     detailKey: 'labels.emergencyActionTypes.notify_delay',
     type: 'notify_delay',
     targetWindow: 'all_day',
   },
   {
-    titleKey: 'emergency.blockDay',
+    titleKey: 'labels.emergencyActionTypes.block_today',
     detailKey: 'labels.emergencyActionTypes.block_today',
     type: 'block_today',
     targetWindow: 'all_day',
   },
   {
-    titleKey: 'emergency.notifyEveryone',
+    titleKey: 'labels.emergencyActionTypes.notify_all_today',
     detailKey: 'labels.emergencyActionTypes.notify_all_today',
     type: 'notify_all_today',
     targetWindow: 'all_day',
@@ -105,7 +119,7 @@ export default function EmergencyScreen() {
     }
 
     if (!hasSupabaseMobileConfig() || !userOrganization) {
-      setMessage('Supabase mobile config or organization is missing.');
+      setMessage(t('mobile.errors.configMissing'));
       return;
     }
 
@@ -113,11 +127,18 @@ export default function EmergencyScreen() {
     setMessage(null);
 
     try {
-      const result = await buildPreview(toRequest(form, t('emergency.defaultReason')), userOrganization.organization.id);
+      const request = toRequest(form, t('emergency.defaultReason'));
+      const result = shouldUseMobileWebApi()
+        ? await postWebApi<EmergencyPlanPreview>('/api/emergency/preview', request)
+        : await buildPreview(request, userOrganization.organization.id);
       setPreview(result);
       setMessage(t('common.previewReadyNoChanges'));
     } catch (error) {
-      setMessage(error instanceof Error ? error.message : t('common.unavailable'));
+      setMessage(
+        error instanceof Error
+          ? translateMobileError(error.message, t)
+          : t('common.unavailable'),
+      );
     } finally {
       setIsBusy(false);
     }
@@ -132,7 +153,7 @@ export default function EmergencyScreen() {
     }
 
     if (!hasSupabaseMobileConfig() || !user || !userOrganization) {
-      setMessage('Supabase mobile config, user or organization is missing.');
+      setMessage(t('mobile.errors.configMissing'));
       return;
     }
 
@@ -140,14 +161,19 @@ export default function EmergencyScreen() {
     setMessage(null);
 
     try {
-      const organizationId = userOrganization.organization.id;
       const request = toRequest(form, t('emergency.defaultReason'));
-      const result = await persistEmergencyPlan(organizationId, user.id, request);
+      const result = shouldUseMobileWebApi()
+        ? await postWebApi<EmergencyModeResult>('/api/emergency/create', request)
+        : await persistEmergencyPlan(userOrganization.organization.id, user.id, request);
 
       setPreview(result);
       setMessage(t('approvals.pendingCreated', { count: result.suggestedActions.length }));
     } catch (error) {
-      setMessage(error instanceof Error ? error.message : t('common.unavailable'));
+      setMessage(
+        error instanceof Error
+          ? translateMobileError(error.message, t)
+          : t('common.unavailable'),
+      );
     } finally {
       setIsBusy(false);
     }
@@ -359,7 +385,7 @@ async function persistEmergencyPlan(
     organizationId,
     createdBy: userId,
     type: request.type,
-    status: 'draft',
+    status: 'pending_approval',
     reason: request.reason,
     targetDate: request.targetDate,
     delayMinutes: request.delayMinutes ?? null,
@@ -528,7 +554,7 @@ const styles = StyleSheet.create({
   },
   quickButton: {
     backgroundColor: '#ffffff',
-    borderColor: '#d6d3d1',
+    borderColor: '#e8e8e8',
     borderRadius: 8,
     borderWidth: 1,
     minHeight: 92,
@@ -536,16 +562,16 @@ const styles = StyleSheet.create({
     padding: 14,
   },
   quickButtonActive: {
-    backgroundColor: '#ecfdf5',
-    borderColor: '#a7f3d0',
+    backgroundColor: '#f0fdfa',
+    borderColor: '#99f6e4',
   },
   quickTitle: {
-    color: '#1c1917',
+    color: '#171717',
     fontSize: 14,
     fontWeight: '800',
   },
   quickDetail: {
-    color: '#78716c',
+    color: '#737373',
     fontSize: 12,
     lineHeight: 17,
     marginTop: 4,
@@ -555,16 +581,16 @@ const styles = StyleSheet.create({
     marginBottom: 12,
   },
   fieldLabel: {
-    color: '#57534e',
+    color: '#525252',
     fontSize: 13,
     fontWeight: '700',
   },
   input: {
     backgroundColor: '#ffffff',
-    borderColor: '#d6d3d1',
+    borderColor: '#e8e8e8',
     borderRadius: 8,
     borderWidth: 1,
-    color: '#1c1917',
+    color: '#171717',
     minHeight: 44,
     paddingHorizontal: 12,
     paddingVertical: 10,
@@ -581,18 +607,18 @@ const styles = StyleSheet.create({
   },
   toneButton: {
     backgroundColor: '#ffffff',
-    borderColor: '#d6d3d1',
+    borderColor: '#e8e8e8',
     borderRadius: 999,
     borderWidth: 1,
     paddingHorizontal: 11,
     paddingVertical: 8,
   },
   toneButtonActive: {
-    backgroundColor: '#1c1917',
-    borderColor: '#1c1917',
+    backgroundColor: '#171717',
+    borderColor: '#171717',
   },
   toneButtonText: {
-    color: '#57534e',
+    color: '#525252',
     fontSize: 12,
     fontWeight: '700',
   },
@@ -613,11 +639,11 @@ const styles = StyleSheet.create({
     paddingHorizontal: 14,
   },
   darkButton: {
-    backgroundColor: '#1c1917',
+    backgroundColor: '#171717',
   },
   lightButton: {
     backgroundColor: '#ffffff',
-    borderColor: '#d6d3d1',
+    borderColor: '#e8e8e8',
     borderWidth: 1,
   },
   disabled: {
@@ -631,17 +657,17 @@ const styles = StyleSheet.create({
     color: '#ffffff',
   },
   lightButtonText: {
-    color: '#44403c',
+    color: '#525252',
   },
   proposal: {
-    borderTopColor: '#e7e5e4',
+    borderTopColor: '#e8e8e8',
     borderTopWidth: 1,
     paddingTop: 12,
   },
   messageBody: {
     backgroundColor: '#f5f5f4',
     borderRadius: 8,
-    color: '#44403c',
+    color: '#525252',
     fontSize: 13,
     lineHeight: 19,
     marginTop: 8,
@@ -649,7 +675,7 @@ const styles = StyleSheet.create({
   },
   linkButton: {
     alignItems: 'center',
-    backgroundColor: '#1c1917',
+    backgroundColor: '#171717',
     borderRadius: 8,
     justifyContent: 'center',
     marginTop: 12,

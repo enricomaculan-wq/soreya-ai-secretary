@@ -154,7 +154,7 @@ export function MultiDevicePanel() {
   }
 
   return (
-    <div className="rounded-lg border border-stone-200 bg-stone-50 p-4">
+    <div className="soreya-card-muted p-4">
       <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
         <div>
           <p className="text-sm font-medium text-stone-950">{t("multiDevice.title")}</p>
@@ -162,7 +162,7 @@ export function MultiDevicePanel() {
             {t("multiDevice.watchBridge")}
           </p>
         </div>
-        <span className="inline-flex w-fit rounded-full border border-emerald-200 bg-emerald-50 px-2.5 py-1 text-xs font-medium text-emerald-700">
+        <span className="inline-flex w-fit rounded-full border border-[var(--trust-border)] bg-[var(--trust-soft)] px-2.5 py-1 text-xs font-medium text-emerald-700">
           {t("multiDevice.smartwatchReady")}
         </span>
       </div>
@@ -173,7 +173,7 @@ export function MultiDevicePanel() {
         <Metric label={t("multiDevice.smartwatch")} value={String(smartwatchCapableDevices.length)} />
       </div>
 
-      <div className="mt-4 overflow-hidden rounded-lg border border-stone-200 bg-white">
+      <div className="mt-4 overflow-hidden soreya-card">
         {isLoading ? (
           <p className="p-4 text-sm text-stone-600">{t("common.loading")}...</p>
         ) : devices.length === 0 ? (
@@ -208,7 +208,7 @@ export function MultiDevicePanel() {
 
       <div className="mt-4 grid gap-3">
         {preferenceRows.map((row) => (
-          <label key={row.key} className="flex items-start justify-between gap-4 rounded-lg border border-stone-200 bg-white p-3">
+          <label key={row.key} className="flex items-start justify-between gap-4 soreya-card p-3">
               <span>
                 <span className="block text-sm font-medium text-stone-950">{watchPreferenceLabel(row.key, t)}</span>
               <span className="mt-1 block text-xs leading-5 text-stone-600">{t(row.detailKey)}</span>
@@ -243,7 +243,7 @@ function watchPreferenceLabel(key: keyof PreferencesForm, translate: (key: strin
 
 function Metric({ label, value }: { label: string; value: string }) {
   return (
-    <div className="rounded-lg border border-stone-200 bg-white p-3">
+    <div className="soreya-card p-3">
       <p className="text-xs font-medium uppercase tracking-[0.12em] text-stone-500">{label}</p>
       <p className="mt-2 text-2xl font-semibold tracking-normal text-stone-950">{value}</p>
     </div>
@@ -266,7 +266,7 @@ function valuesFromPreferences(preferences: NotificationPreferences | null | und
 
 function statusClassName(status: RegisteredDevice["status"]): string {
   if (status === "active") {
-    return "mt-1 inline-flex rounded-full border border-emerald-200 bg-emerald-50 px-2 py-0.5 text-xs font-medium text-emerald-700";
+    return "mt-1 inline-flex rounded-full border border-[var(--trust-border)] bg-[var(--trust-soft)] px-2 py-0.5 text-xs font-medium text-emerald-700";
   }
 
   if (status === "revoked") {

@@ -3,6 +3,7 @@ import React from 'react';
 
 import { HapticTab } from '@/components/haptic-tab';
 import { IconSymbol } from '@/components/ui/icon-symbol';
+import { SoreyaDesign as D } from '@/constants/design';
 import { Colors } from '@/constants/theme';
 import { useColorScheme } from '@/hooks/use-color-scheme';
 import { useI18n } from '@/lib/i18n';
@@ -18,11 +19,13 @@ export default function TabLayout() {
         headerShown: false,
         tabBarButton: HapticTab,
         tabBarLabelStyle: {
-          fontSize: 11,
-          fontWeight: '600',
+          fontSize: 10,
+          fontWeight: '500',
+          letterSpacing: -0.2,
         },
         tabBarStyle: {
-          borderTopColor: '#e7e5e4',
+          backgroundColor: D.surface,
+          borderTopColor: D.border,
           height: 64,
           paddingBottom: 8,
           paddingTop: 6,
@@ -31,15 +34,29 @@ export default function TabLayout() {
       <Tabs.Screen
         name="index"
         options={{
-          title: t('demoApp.hero.title'),
-          tabBarIcon: ({ color }) => <IconSymbol size={26} name="house.fill" color={color} />,
+          title: t('navigation.home'),
+          tabBarIcon: ({ color }) => <IconSymbol size={24} name="house.fill" color={color} />,
+        }}
+      />
+      <Tabs.Screen
+        name="daily-summary"
+        options={{
+          title: t('navigation.dailySummary'),
+          tabBarIcon: ({ color }) => <IconSymbol size={24} name="sun.max.fill" color={color} />,
+        }}
+      />
+      <Tabs.Screen
+        name="inbox"
+        options={{
+          title: t('navigation.inbox'),
+          tabBarIcon: ({ color }) => <IconSymbol size={24} name="tray.fill" color={color} />,
         }}
       />
       <Tabs.Screen
         name="approvals"
         options={{
           title: t('navigation.approvals'),
-          tabBarIcon: ({ color }) => <IconSymbol size={26} name="checkmark.circle.fill" color={color} />,
+          tabBarIcon: ({ color }) => <IconSymbol size={24} name="checkmark.circle.fill" color={color} />,
         }}
       />
       <Tabs.Screen
@@ -50,24 +67,24 @@ export default function TabLayout() {
         }}
       />
       <Tabs.Screen
-        name="calendar"
+        name="quick-call-note"
         options={{
-          title: t('navigation.calendar'),
-          tabBarIcon: ({ color }) => <IconSymbol size={26} name="calendar" color={color} />,
+          title: t('navigation.quickCall'),
+          tabBarIcon: ({ color }) => <IconSymbol size={24} name="phone.fill" color={color} />,
         }}
       />
       <Tabs.Screen
-        name="quick-call-note"
+        name="calendar"
         options={{
-          title: t('quickCall.title'),
-          tabBarIcon: ({ color }) => <IconSymbol size={26} name="phone.fill" color={color} />,
+          title: t('navigation.calendar'),
+          tabBarIcon: ({ color }) => <IconSymbol size={24} name="calendar" color={color} />,
         }}
       />
       <Tabs.Screen
         name="settings"
         options={{
           title: t('navigation.settings'),
-          tabBarIcon: ({ color }) => <IconSymbol size={26} name="gearshape.fill" color={color} />,
+          tabBarIcon: ({ color }) => <IconSymbol size={24} name="gearshape.fill" color={color} />,
         }}
       />
     </Tabs>

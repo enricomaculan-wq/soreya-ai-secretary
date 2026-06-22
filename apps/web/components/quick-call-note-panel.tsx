@@ -158,7 +158,7 @@ export function QuickCallNotePanel() {
 
   return (
     <div className="mt-5 space-y-5">
-      <p className="rounded-md border border-emerald-200 bg-emerald-50 p-3 text-sm text-emerald-800">
+      <p className="rounded-md border border-[var(--trust-border)] bg-[var(--trust-soft)] p-3 text-sm text-[var(--trust)]">
         {t("quickCall.title")}: {t("safety.approvalFirst")}
       </p>
 

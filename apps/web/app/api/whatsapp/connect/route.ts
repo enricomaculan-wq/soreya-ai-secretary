@@ -1,4 +1,4 @@
-import { upsertConnectedWhatsAppAccount } from "@soreya/database";
+import { getConnectedWhatsAppAccount, upsertConnectedWhatsAppAccount } from "@soreya/database";
 
 import { jsonError, readOptionalString, readWhatsAppAccessToken } from "@/lib/server/whatsapp-api";
 import { getAuthenticatedServerContext } from "@/lib/server/supabase";
@@ -25,7 +25,15 @@ export async function POST(request: Request) {
     const displayPhoneNumber = readOptionalString(body.displayPhoneNumber);
     const verifiedName = readOptionalString(body.verifiedName);
     const webhookVerifyToken = readOptionalString(body.webhookVerifyToken) ?? process.env.WHATSAPP_VERIFY_TOKEN ?? null;
-    const accessToken = readWhatsAppAccessToken(readOptionalString(body.accessToken));
+    const accessTokenFromForm = readOptionalString(body.accessToken);
+    const existingAccount = await getConnectedWhatsAppAccount(
+      context.supabase,
+      context.userOrganization.organization.id,
+    );
+    const accessTokenEncrypted = accessTokenFromForm
+      ? encryptToken(readWhatsAppAccessToken(accessTokenFromForm), "WHATSAPP_TOKEN_ENCRYPTION_KEY")
+      : existingAccount?.accessTokenEncrypted
+        ?? encryptToken(readWhatsAppAccessToken(null), "WHATSAPP_TOKEN_ENCRYPTION_KEY");
 
     if (!phoneNumberId) {
       return Response.json({ error: "phoneNumberId is required." }, { status: 400 });
@@ -39,7 +47,7 @@ export async function POST(request: Request) {
       displayPhoneNumber,
       verifiedName,
       webhookVerifyToken,
-      accessTokenEncrypted: encryptToken(accessToken, "WHATSAPP_TOKEN_ENCRYPTION_KEY"),
+      accessTokenEncrypted,
       status: "active",
       metadata: {
         configuredFrom: "web_dashboard",

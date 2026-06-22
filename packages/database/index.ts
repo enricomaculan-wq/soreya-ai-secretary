@@ -54,8 +54,16 @@ import {
   type ExecutionType,
   type Json,
   type NormalizedEmailMessage,
+  type NormalizedWebsiteFormMessage,
   type NormalizedCalendarEvent,
   type NormalizedWhatsAppMessage,
+  mergeWebsiteFormSettings,
+  mergeWebsiteChatSettings,
+  mergeAddedSettingsChannels,
+  parseWebsiteFormSettings,
+  parseWebsiteChatSettings,
+  parseAddedSettingsChannels,
+  type SettingsChannelId,
   type NotificationPreferences,
   type Organization,
   type OrganizationMember,
@@ -80,6 +88,9 @@ import {
   type WhatsAppConnectionStatus,
   type WhatsAppProvider,
   type WhatsAppReplyActionType,
+  readMatchedServicesFromConstraints,
+  readMatchedServiceFromConstraints,
+  resolveCombinedServiceDurationMinutes,
 } from "@soreya/shared";
 
 export type SoreyaSupabaseClient = SupabaseClient<Database>;
@@ -115,6 +126,7 @@ export type CalendarActionProposalInput = {
   provider: CalendarProvider;
   actionType: CalendarActionType;
   payload: Json;
+  appointmentRequestId?: string | null;
   title?: string;
   rationale?: string | null;
   riskLevel?: SuggestedAction["risk_level"];
@@ -156,6 +168,7 @@ export type CreateEmailReplySuggestionInput = {
   organizationId: string;
   provider: EmailProvider;
   messageId: string;
+  threadId?: string | null;
   subject: string;
   body: string;
   recipient: string;
@@ -1061,6 +1074,22 @@ export async function getExecutableSuggestedAction(
   return action;
 }
 
+function isMissingSyncSchemaError(error: { code?: string; message?: string } | null): boolean {
+  if (!error) {
+    return false;
+  }
+
+  if (error.code === "42P01" || error.code === "42703" || error.code === "PGRST204" || error.code === "PGRST205") {
+    return true;
+  }
+
+  const message = error.message ?? "";
+  return (
+    /does not exist/i.test(message) &&
+    /(sync_logs|last_sync_status|last_sync_error|last_sync_at|provider)/i.test(message)
+  );
+}
+
 export async function createSyncLog(
   client: SoreyaSupabaseClient,
   input: CreateSyncLogInput,
@@ -1088,6 +1117,21 @@ export async function createSyncLog(
   }
 
   return toSyncLog(data);
+}
+
+export async function createSyncLogOptional(
+  client: SoreyaSupabaseClient,
+  input: CreateSyncLogInput,
+): Promise<SyncLog | null> {
+  try {
+    return await createSyncLog(client, input);
+  } catch (error) {
+    if (isMissingSyncSchemaError(error as { code?: string; message?: string })) {
+      return null;
+    }
+
+    throw error;
+  }
 }
 
 export async function updateSyncLog(
@@ -1185,7 +1229,7 @@ export async function getAccountsNeedingRefresh(
   let query = client
     .from("connected_accounts")
     .select("*")
-    .in("provider", ["google_calendar", "microsoft_calendar", "gmail", "microsoft_mail"])
+    .in("provider", ["google_calendar", "gmail", "microsoft_mail"])
     .not("encrypted_refresh_token", "is", null)
     .or(`token_expires_at.is.null,token_expires_at.lte.${refreshBefore}`);
 
@@ -1215,6 +1259,10 @@ export async function markAccountSyncStarted(
     .eq("id", accountId);
 
   if (error) {
+    if (isMissingSyncSchemaError(error)) {
+      return;
+    }
+
     throw error;
   }
 }
@@ -1246,6 +1294,30 @@ export async function markAccountSyncFinished(
     .eq("id", accountId);
 
   if (error) {
+    if (isMissingSyncSchemaError(error)) {
+      const legacyUpdate: Database["public"]["Tables"]["connected_accounts"]["Update"] = {};
+
+      if (status === "success" || status === "partial_success") {
+        legacyUpdate.last_synced_at = update.last_sync_at;
+        legacyUpdate.status = "active";
+      }
+
+      if (status === "failed") {
+        legacyUpdate.status = "error";
+      }
+
+      const { error: legacyError } = await client
+        .from("connected_accounts")
+        .update(legacyUpdate)
+        .eq("id", accountId);
+
+      if (legacyError) {
+        throw legacyError;
+      }
+
+      return;
+    }
+
     throw error;
   }
 }
@@ -1454,7 +1526,7 @@ export async function createEmergencyAction(
       requested_by: input.createdBy,
       created_by: input.createdBy,
       action_type: input.type,
-      status: input.status ?? "draft",
+      status: input.status ?? "pending_approval",
       reason: input.reason,
       target_date: input.targetDate,
       delay_minutes: input.delayMinutes ?? null,
@@ -1793,12 +1865,15 @@ export async function createAppointmentRequestFromCallNote(
     return null;
   }
 
+  const matchedServices = readMatchedServicesFromConstraints(input.analysis.extractedConstraints);
+  const matchedService = matchedServices[0] ?? null;
   const { data, error } = await client
     .from("appointment_requests")
     .insert({
       organization_id: input.organizationId,
       incoming_message_id: null,
       call_note_id: input.callNote.id,
+      service_id: matchedService?.id ?? null,
       source_channel: null,
       source_type: "quick_call",
       status: input.conflictDetected ? "conflict_detected" : "needs_review",
@@ -1806,6 +1881,9 @@ export async function createAppointmentRequestFromCallNote(
       requested_start: input.analysis.requestedStartsAt,
       requested_end: input.analysis.requestedEndsAt,
       requested_timezone: null,
+      duration_minutes: matchedServices.length > 0
+        ? resolveCombinedServiceDurationMinutes(matchedServices)
+        : null,
       confidence: input.analysis.confidence,
       conflict_detected: input.conflictDetected ?? false,
       conflict_reason: input.conflictReason ?? null,
@@ -2167,14 +2245,33 @@ export async function getConnectedCalendarAccounts(
     .from("connected_accounts")
     .select("*")
     .eq("organization_id", organizationId)
-    .in("provider", ["google_calendar", "microsoft_calendar"])
     .order("created_at", { ascending: true });
 
   if (error) {
     throw error;
   }
 
-  return (data ?? []).map(toConnectedCalendarAccount);
+  return (data ?? [])
+    .filter((row) => row.provider === "google_calendar" || row.provider === "microsoft_calendar")
+    .map(toConnectedCalendarAccount);
+}
+
+function pickPreferredCalendarAccount(
+  accounts: ConnectedCalendarAccount[],
+  provider: CalendarProvider,
+): ConnectedCalendarAccount | null {
+  const matches = accounts.filter((account) => account.provider === provider);
+
+  if (matches.length === 0) {
+    return null;
+  }
+
+  const active = matches.filter((account) => account.status === "active");
+  const pool = active.length > 0 ? active : matches;
+
+  return [...pool].sort(
+    (left, right) => new Date(right.updatedAt).getTime() - new Date(left.updatedAt).getTime(),
+  )[0];
 }
 
 export async function getConnectedCalendarAccountByProvider(
@@ -2182,18 +2279,8 @@ export async function getConnectedCalendarAccountByProvider(
   organizationId: string,
   provider: CalendarProvider,
 ): Promise<ConnectedCalendarAccount | null> {
-  const { data, error } = await client
-    .from("connected_accounts")
-    .select("*")
-    .eq("organization_id", organizationId)
-    .eq("provider", toCalendarAccountProvider(provider))
-    .maybeSingle();
-
-  if (error) {
-    throw error;
-  }
-
-  return data ? toConnectedCalendarAccount(data) : null;
+  const accounts = await getConnectedCalendarAccounts(client, organizationId);
+  return pickPreferredCalendarAccount(accounts, provider);
 }
 
 export async function upsertConnectedCalendarAccount(
@@ -2227,7 +2314,16 @@ export async function upsertConnectedCalendarAccount(
     throw error;
   }
 
-  return toConnectedCalendarAccount(data);
+  const account = toConnectedCalendarAccount(data);
+
+  await client
+    .from("connected_accounts")
+    .update({ status: "disabled" })
+    .eq("organization_id", input.organizationId)
+    .eq("provider", toCalendarAccountProvider(input.provider))
+    .neq("id", account.id);
+
+  return account;
 }
 
 export async function cacheCalendarEvents(
@@ -2259,9 +2355,16 @@ export async function cacheCalendarEvents(
     synced_at: new Date().toISOString(),
   }));
 
-  const { error } = await client
+  let { error } = await client
     .from("calendar_events_cache")
     .upsert(rows, { onConflict: "organization_id,connected_account_id,external_event_id" });
+
+  if (error && isMissingSyncSchemaError(error)) {
+    const legacyRows = rows.map(({ provider: _provider, ...row }) => row);
+    ({ error } = await client
+      .from("calendar_events_cache")
+      .upsert(legacyRows, { onConflict: "organization_id,connected_account_id,external_event_id" }));
+  }
 
   if (error) {
     throw error;
@@ -2325,7 +2428,7 @@ export async function getCalendarConnectionStatuses(
   const accounts = await getConnectedCalendarAccounts(client, organizationId);
 
   return (["google", "microsoft"] as const).map((provider) => {
-    const account = accounts.find((candidate) => candidate.provider === provider);
+    const account = pickPreferredCalendarAccount(accounts, provider);
 
     return {
       provider,
@@ -2343,17 +2446,20 @@ export async function createCalendarActionProposal(
   client: SoreyaSupabaseClient,
   input: CalendarActionProposalInput,
 ): Promise<SuggestedAction> {
+  const payloadRecord = toJsonRecord(input.payload);
+
   const { data, error } = await client
     .from("suggested_actions")
     .insert({
       organization_id: input.organizationId,
+      appointment_request_id: input.appointmentRequestId ?? null,
       action_type: input.actionType,
       status: "pending_approval",
       title: input.title ?? buildCalendarActionTitle(input.actionType),
       rationale: input.rationale ?? "Calendar operation proposal awaiting explicit user approval.",
       draft_payload: {
         provider: input.provider,
-        payload: input.payload,
+        ...payloadRecord,
       },
       external_payload: {},
       risk_level: input.riskLevel ?? "normal",
@@ -2591,17 +2697,23 @@ export async function createAppointmentRequestFromEmail(
     throw messageError;
   }
 
+  const matchedServices = readMatchedServicesFromConstraints(input.intent.extractedConstraints);
+  const matchedService = matchedServices[0] ?? null;
   const { data, error } = await client
     .from("appointment_requests")
     .insert({
       organization_id: input.organizationId,
       incoming_message_id: messageRow?.id ?? null,
+      service_id: matchedService?.id ?? null,
       source_channel: "email",
       status: input.conflictDetected ? "conflict_detected" : "needs_review",
       title: input.message.subject ?? "Appointment request",
       requested_start: input.intent.requestedStartsAt,
       requested_end: input.intent.requestedEndsAt,
       requested_timezone: input.intent.timezone,
+      duration_minutes: matchedServices.length > 0
+        ? resolveCombinedServiceDurationMinutes(matchedServices)
+        : null,
       location: null,
       confidence: input.intent.confidence,
       conflict_detected: input.conflictDetected ?? false,
@@ -2651,6 +2763,7 @@ export async function createEmailReplySuggestion(
       draft_payload: {
         provider: input.provider,
         messageId: input.messageId,
+        threadId: input.threadId ?? null,
         subject: input.subject,
         body: input.body,
         recipient: input.recipient,
@@ -2929,17 +3042,23 @@ export async function createAppointmentRequestFromWhatsApp(
     throw messageError;
   }
 
+  const matchedServices = readMatchedServicesFromConstraints(input.intent.extractedConstraints);
+  const matchedService = matchedServices[0] ?? null;
   const { data, error } = await client
     .from("appointment_requests")
     .insert({
       organization_id: input.organizationId,
       incoming_message_id: messageRow?.id ?? null,
+      service_id: matchedService?.id ?? null,
       source_channel: "whatsapp",
       status: input.conflictDetected ? "conflict_detected" : "needs_review",
       title: input.intent.reason ?? "WhatsApp appointment request",
       requested_start: input.intent.requestedStartsAt,
       requested_end: input.intent.requestedEndsAt,
       requested_timezone: input.intent.timezone,
+      duration_minutes: matchedServices.length > 0
+        ? resolveCombinedServiceDurationMinutes(matchedServices)
+        : null,
       location: null,
       confidence: input.intent.confidence,
       conflict_detected: input.conflictDetected ?? false,
@@ -3211,6 +3330,237 @@ function readJsonMetadata(metadata: Json | undefined, key: string): Json {
 
   return metadata[key] ?? null;
 }
+
+function toJsonRecord(value: Json): Record<string, Json> {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    return {};
+  }
+
+  return value as Record<string, Json>;
+}
+
+export async function getOrganizationBySlug(
+  client: SoreyaSupabaseClient,
+  slug: string,
+) {
+  const { data, error } = await client
+    .from("organizations")
+    .select("*")
+    .eq("slug", slug.trim().toLowerCase())
+    .maybeSingle();
+
+  if (error) {
+    throw error;
+  }
+
+  return data;
+}
+
+export async function updateOrganizationWebsiteFormSettings(
+  client: SoreyaSupabaseClient,
+  organizationId: string,
+  patch: { enabled?: boolean; ingestToken?: string | null },
+) {
+  const { data: organization, error: readError } = await client
+    .from("organizations")
+    .select("settings")
+    .eq("id", organizationId)
+    .single();
+
+  if (readError) {
+    throw readError;
+  }
+
+  const settings = mergeWebsiteFormSettings(organization.settings, patch);
+  const { data, error } = await client
+    .from("organizations")
+    .update({
+      settings,
+      updated_at: new Date().toISOString(),
+    })
+    .eq("id", organizationId)
+    .select("*")
+    .single();
+
+  if (error) {
+    throw error;
+  }
+
+  return {
+    organization: data,
+    websiteForm: parseWebsiteFormSettings(data.settings),
+  };
+}
+
+export async function ensureWebsiteFormConnectedAccount(
+  client: SoreyaSupabaseClient,
+  organizationId: string,
+) {
+  const { data: existing, error: readError } = await client
+    .from("connected_accounts")
+    .select("id")
+    .eq("organization_id", organizationId)
+    .eq("provider", "website_form")
+    .maybeSingle();
+
+  if (readError) {
+    throw readError;
+  }
+
+  if (existing?.id) {
+    return existing.id;
+  }
+
+  const { data, error } = await client
+    .from("connected_accounts")
+    .insert({
+      organization_id: organizationId,
+      provider: "website_form",
+      provider_account_id: `website_form:${organizationId}`,
+      display_name: "Website form",
+      status: "active",
+      metadata: { source: "website_form" },
+    })
+    .select("id")
+    .single();
+
+  if (error) {
+    throw error;
+  }
+
+  return data.id;
+}
+
+export async function cacheIncomingWebsiteFormMessage(
+  client: SoreyaSupabaseClient,
+  organizationId: string,
+  accountId: string,
+  message: NormalizedWebsiteFormMessage,
+): Promise<void> {
+  const { error } = await client
+    .from("incoming_messages")
+    .insert({
+      organization_id: organizationId,
+      connected_account_id: accountId,
+      provider_message_id: message.providerMessageId,
+      source_channel: "website_form",
+      direction: "incoming",
+      status: "classified",
+      from_name: message.fromName,
+      from_email: message.fromEmail,
+      subject: message.subject,
+      body_text: message.bodyText,
+      received_at: message.receivedAt,
+      classified_at: new Date().toISOString(),
+      ai_classification: {},
+      attachments: [],
+      metadata: {
+        source: "website_form",
+        phone: message.fromPhone,
+        pageUrl: message.pageUrl,
+        formName: message.formName,
+        raw: message.raw,
+      },
+    });
+
+  if (error) {
+    throw error;
+  }
+}
+
+export async function getCachedWebsiteFormMessages(
+  client: SoreyaSupabaseClient,
+  organizationId: string,
+  filters: IncomingMessageFilters = {},
+): Promise<NormalizedWebsiteFormMessage[]> {
+  let query = client
+    .from("incoming_messages")
+    .select("*")
+    .eq("organization_id", organizationId)
+    .eq("source_channel", "website_form")
+    .order("received_at", { ascending: false })
+    .limit(filters.limit ?? 25);
+
+  if (filters.receivedAfter) {
+    query = query.gte("received_at", filters.receivedAfter);
+  }
+
+  if (filters.receivedBefore) {
+    query = query.lte("received_at", filters.receivedBefore);
+  }
+
+  const { data, error } = await query;
+
+  if (error) {
+    throw error;
+  }
+
+  return (data ?? []).map(toNormalizedWebsiteFormMessage);
+}
+
+function toNormalizedWebsiteFormMessage(
+  row: Database["public"]["Tables"]["incoming_messages"]["Row"],
+): NormalizedWebsiteFormMessage {
+  const metadata = toJsonRecord(row.metadata);
+
+  return {
+    id: row.id,
+    organizationId: row.organization_id,
+    providerMessageId: row.provider_message_id ?? row.id,
+    fromName: row.from_name,
+    fromEmail: row.from_email,
+    fromPhone: typeof metadata.phone === "string" ? metadata.phone : null,
+    subject: row.subject,
+    bodyText: row.body_text,
+    receivedAt: row.received_at,
+    pageUrl: typeof metadata.pageUrl === "string" ? metadata.pageUrl : null,
+    formName: typeof metadata.formName === "string" ? metadata.formName : null,
+    raw: metadata.raw ?? metadata,
+    createdAt: row.created_at,
+    updatedAt: row.updated_at,
+  };
+}
+
+export async function updateOrganizationAddedChannels(
+  client: SoreyaSupabaseClient,
+  organizationId: string,
+  addedChannels: SettingsChannelId[],
+) {
+  const { data: organization, error: readError } = await client
+    .from("organizations")
+    .select("settings")
+    .eq("id", organizationId)
+    .single();
+
+  if (readError) {
+    throw readError;
+  }
+
+  const settings = mergeAddedSettingsChannels(organization.settings, addedChannels);
+  const { data, error } = await client
+    .from("organizations")
+    .update({
+      settings,
+      updated_at: new Date().toISOString(),
+    })
+    .eq("id", organizationId)
+    .select("*")
+    .single();
+
+  if (error) {
+    throw error;
+  }
+
+  return {
+    organization: data,
+    addedChannels: parseAddedSettingsChannels(data.settings),
+  };
+}
+
+export * from "./website-chat";
+export * from "./telegram";
+export type { SyncLog } from "@soreya/shared";
+export * from "./brain";
 
 function buildCalendarActionTitle(actionType: CalendarActionType): string {
   const labels: Record<CalendarActionType, string> = {

@@ -1,3 +1,10 @@
+import {
+  rateLimitEnabled,
+  readRateLimitMaxRequests,
+  readRateLimitWindowSeconds,
+} from "./rate-limit-config";
+import { incrementUpstashCounter, readUpstashRateLimitConfig } from "./rate-limit-upstash";
+
 type RateLimitOptions = {
   route: string;
   limit?: number;
@@ -20,6 +27,46 @@ export type RateLimitResult = {
 };
 
 export function checkRateLimit(request: Request, options: RateLimitOptions): RateLimitResult {
+  return checkRateLimitInMemory(request, options);
+}
+
+export async function checkRateLimitAsync(request: Request, options: RateLimitOptions): Promise<RateLimitResult> {
+  const limit = options.limit ?? readRateLimitMaxRequests();
+  const windowSeconds = options.windowSeconds ?? readRateLimitWindowSeconds();
+  const now = Date.now();
+
+  if (!rateLimitEnabled() || limit <= 0 || windowSeconds <= 0) {
+    return {
+      allowed: true,
+      key: buildRateLimitKey(request, options, now, windowSeconds),
+      limit,
+      remaining: limit,
+      resetAt: now,
+    };
+  }
+
+  const upstash = readUpstashRateLimitConfig();
+
+  if (upstash) {
+    const key = buildRateLimitKey(request, options, now, windowSeconds);
+    const count = await incrementUpstashCounter(upstash, key);
+    const resetAt = Math.ceil(now / (windowSeconds * 1000)) * windowSeconds * 1000;
+
+    if (count !== null) {
+      return {
+        allowed: count <= limit,
+        key,
+        limit,
+        remaining: Math.max(0, limit - count),
+        resetAt,
+      };
+    }
+  }
+
+  return checkRateLimitInMemory(request, options);
+}
+
+function checkRateLimitInMemory(request: Request, options: RateLimitOptions): RateLimitResult {
   const limit = options.limit ?? readRateLimitMaxRequests();
   const windowSeconds = options.windowSeconds ?? readRateLimitWindowSeconds();
   const key = `${clientIp(request)}:${options.route}`;
@@ -50,6 +97,17 @@ export function checkRateLimit(request: Request, options: RateLimitOptions): Rat
   };
 }
 
+function buildRateLimitKey(
+  request: Request,
+  options: RateLimitOptions,
+  now: number,
+  windowSeconds: number,
+) {
+  const windowBucket = Math.floor(now / (windowSeconds * 1000));
+
+  return `rl:${windowBucket}:${clientIp(request)}:${options.route}`;
+}
+
 export function rateLimitResponse(result: RateLimitResult): Response {
   return Response.json(
     {
@@ -67,21 +125,7 @@ export function rateLimitResponse(result: RateLimitResult): Response {
   );
 }
 
-export function rateLimitEnabled(env: NodeJS.ProcessEnv = process.env): boolean {
-  return env.ENABLE_RATE_LIMIT === "true";
-}
-
-export function readRateLimitWindowSeconds(env: NodeJS.ProcessEnv = process.env): number {
-  const parsed = Number(env.RATE_LIMIT_WINDOW_SECONDS);
-
-  return Number.isFinite(parsed) && parsed > 0 ? Math.floor(parsed) : 60;
-}
-
-export function readRateLimitMaxRequests(env: NodeJS.ProcessEnv = process.env): number {
-  const parsed = Number(env.RATE_LIMIT_MAX_REQUESTS);
-
-  return Number.isFinite(parsed) && parsed > 0 ? Math.floor(parsed) : 60;
-}
+export { rateLimitEnabled, readRateLimitMaxRequests, readRateLimitWindowSeconds } from "./rate-limit-config";
 
 function clientIp(request: Request): string {
   const forwardedFor = request.headers.get("x-forwarded-for")?.split(",")[0]?.trim();

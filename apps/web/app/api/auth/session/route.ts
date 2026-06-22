@@ -1,4 +1,6 @@
-import { createServerSupabaseClient, SOREYA_ACCESS_TOKEN_COOKIE, SOREYA_REFRESH_TOKEN_COOKIE } from "@/lib/server/supabase";
+import { checkRateLimitAsync, rateLimitResponse } from "@/lib/server/rate-limit";
+import { createServerSupabaseClient } from "@/lib/server/supabase";
+import { SOREYA_ACCESS_TOKEN_COOKIE, SOREYA_REFRESH_TOKEN_COOKIE } from "@/lib/auth-cookies";
 import { cookies } from "next/headers";
 import { NextResponse } from "next/server";
 
@@ -10,6 +12,12 @@ const COOKIE_OPTIONS = {
 };
 
 export async function POST(request: Request) {
+  const rateLimit = await checkRateLimitAsync(request, { route: "/api/auth/session", limit: 30 });
+
+  if (!rateLimit.allowed) {
+    return rateLimitResponse(rateLimit);
+  }
+
   const body = (await request.json()) as {
     accessToken?: string;
     refreshToken?: string;

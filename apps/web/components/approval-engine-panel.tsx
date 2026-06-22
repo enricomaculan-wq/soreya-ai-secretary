@@ -41,7 +41,7 @@ type EditingState = {
   mode: "body" | "payload";
 };
 
-export function ApprovalEnginePanel() {
+export function ApprovalEnginePanel({ marketing = false }: { marketing?: boolean }) {
   const { locale, t, label } = useI18n();
   const [actions, setActions] = useState<SuggestedAction[]>([]);
   const [demoActions, setDemoActions] = useDemoSuggestedActions(locale);
@@ -59,7 +59,9 @@ export function ApprovalEnginePanel() {
     setMessage(null);
 
     if (demoMode) {
-      setMessage(t("demo.sandboxCopy"));
+      if (!marketing) {
+        setMessage(t("demo.sandboxCopy"));
+      }
       setIsLoading(false);
       return;
     }
@@ -88,7 +90,7 @@ export function ApprovalEnginePanel() {
     } finally {
       setIsLoading(false);
     }
-  }, [demoMode, t]);
+  }, [demoMode, marketing, t]);
 
   useEffect(() => {
     void Promise.resolve().then(loadActions);
@@ -319,18 +321,25 @@ export function ApprovalEnginePanel() {
   }
 
   if (visibleActions.length === 0) {
-    return <EmptyState title={t("approvals.noPending")} detail={t("approvals.noPendingDetail")} />;
+    return (
+      <EmptyState
+        detail={t("approvals.noPendingDetail")}
+        title={t("approvals.noPending")}
+      />
+    );
   }
 
   return (
-    <div className="mt-5 space-y-5 border-t border-stone-200 pt-5">
-      <p className="rounded-md border border-emerald-200 bg-emerald-50 p-3 text-sm text-emerald-800">
+    <div className="space-y-4">
+      <p className="soreya-engine-note">
         {t("safety.approvalFirst")}
       </p>
-      <p className="rounded-md border border-amber-200 bg-amber-50 p-3 text-sm text-amber-800">
-        {t("safety.approvalIsNotExecution")} {t("safety.dryRunExecution")}
-      </p>
-      {message ? (
+      {!marketing ? (
+        <p className="rounded-md border border-amber-200 bg-amber-50 p-3 text-sm text-amber-800">
+          {t("safety.approvalIsNotExecution")} {t("safety.dryRunExecution")}
+        </p>
+      ) : null}
+      {message && !marketing ? (
         <p className="rounded-md border border-stone-200 bg-stone-50 p-3 text-sm text-stone-700">{message}</p>
       ) : null}
 
@@ -343,7 +352,7 @@ export function ApprovalEnginePanel() {
         const canReview = action.status === "pending_approval" || action.status === "edited";
 
         return (
-          <article key={action.id} className="rounded-lg border border-stone-200 bg-white p-5 shadow-sm">
+          <article key={action.id} className="soreya-approval-item">
             <div className="flex flex-col gap-4 xl:flex-row xl:items-start xl:justify-between">
               <div className="min-w-0">
                 <div className="flex flex-wrap items-center gap-2">
@@ -400,12 +409,14 @@ export function ApprovalEnginePanel() {
               </pre>
             ) : null}
 
-            <details className="mt-4 rounded-md border border-stone-200 bg-stone-50 p-3">
-              <summary className="cursor-pointer text-sm font-medium text-stone-800">{t("common.payload")}</summary>
-              <pre className="mt-3 overflow-x-auto whitespace-pre-wrap text-xs leading-5 text-stone-600">
-                {JSON.stringify(action.draft_payload, null, 2)}
-              </pre>
-            </details>
+            {!marketing ? (
+              <details className="mt-4 rounded-md border border-stone-200 bg-stone-50 p-3">
+                <summary className="cursor-pointer text-sm font-medium text-stone-800">{t("common.payload")}</summary>
+                <pre className="mt-3 overflow-x-auto whitespace-pre-wrap text-xs leading-5 text-stone-600">
+                  {JSON.stringify(action.draft_payload, null, 2)}
+                </pre>
+              </details>
+            ) : null}
 
             {isEditing ? (
               <div className="mt-4 rounded-md border border-amber-200 bg-amber-50 p-4">
@@ -437,17 +448,17 @@ export function ApprovalEnginePanel() {
               </div>
             ) : null}
 
-            {action.status === "approved" ? (
-              <div className="mt-4 rounded-md border border-emerald-200 bg-emerald-50 p-4">
+            {action.status === "approved" && !marketing ? (
+              <div className="mt-4 rounded-md border border-[var(--trust-border)] bg-[var(--trust-soft)] p-4">
                 <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
                   <div>
                     <p className="text-sm font-semibold text-emerald-950">{label("approvalStatus", "approved")}</p>
-                    <p className="mt-1 text-sm leading-6 text-emerald-800">
+                    <p className="mt-1 text-sm leading-6 text-[var(--trust)]">
                       {t("safety.dryRunExecution")}
                     </p>
                   </div>
                   <button
-                    className="rounded-md border border-emerald-300 bg-white px-3 py-2 text-sm font-medium text-emerald-800 disabled:cursor-not-allowed disabled:bg-emerald-100"
+                    className="rounded-md border border-emerald-300 bg-white px-3 py-2 text-sm font-medium text-[var(--trust)] disabled:cursor-not-allowed disabled:bg-emerald-100"
                     disabled={busy}
                     onClick={() => previewExecution(action)}
                     type="button"
@@ -457,7 +468,7 @@ export function ApprovalEnginePanel() {
                 </div>
 
                 {executionPreview ? (
-                  <div className="mt-4 rounded-md border border-emerald-200 bg-white p-3">
+                  <div className="mt-4 rounded-md border border-[var(--trust-border)] bg-white p-3">
                     <p className="text-sm font-medium text-stone-950">
                       {executionPreview.executionType} · {executionPreview.provider ?? t("common.providerPending")}
                     </p>
@@ -650,7 +661,7 @@ function EmptyState({ title, detail }: { title: string; detail: string }) {
 function StatusPill({ children, tone = "neutral" }: { children: string; tone?: "neutral" | "green" | "amber" }) {
   const toneClass =
     tone === "green"
-      ? "border-emerald-200 bg-emerald-50 text-emerald-700"
+      ? "border-[var(--trust-border)] bg-[var(--trust-soft)] text-emerald-700"
       : tone === "amber"
         ? "border-amber-200 bg-amber-50 text-amber-700"
         : "border-stone-200 bg-stone-50 text-stone-700";

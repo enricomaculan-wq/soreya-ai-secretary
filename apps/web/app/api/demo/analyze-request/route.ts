@@ -6,10 +6,15 @@ import type {
   SuggestedActionType,
   SupportedLocale,
 } from "@soreya/shared";
-import { resolveLocale } from "@soreya/shared";
+import { resolveLocale, resolveDemoPatientFirstName, detectDemoAppointmentConfirmationFollowUp, describeDemoScheduleFacts, findDemoFreeSlots, isDemoSlotBusy, detectDemoCustomerGreeting, formatDemoStudioGreeting } from "@soreya/shared";
 import { z } from "zod";
 
-import { checkRateLimit, rateLimitResponse } from "@/lib/server/rate-limit";
+import {
+  buildDemoBrainSystemPrompt,
+  enrichDemoAnalyzeResultWithContext,
+  resolveDemoBrainContext,
+} from "@/lib/server/demo-brain";
+import { checkRateLimitAsync, rateLimitResponse } from "@/lib/server/rate-limit";
 
 export const runtime = "nodejs";
 
@@ -113,6 +118,14 @@ type DemoAnalyzeResponse = {
   clarificationQuestion: string | null;
   missingFields: string[];
   recommendedNextStep: RecommendedNextStep;
+  requiresOperatorAttention: boolean;
+  operatorAttentionCategory:
+    | "billing"
+    | "complaint"
+    | "medical_advice"
+    | "certificate"
+    | "general"
+    | null;
   safetyNotes: string[];
   demoSuggestedAction: SuggestedActionType;
   aiProvider: "openai" | "heuristic";
@@ -137,7 +150,9 @@ type DemoCalendarScenario =
   | "tomorrow"
   | "tomorrow_15"
   | "thursday_15"
+  | "thursday"
   | "reschedule_tomorrow"
+  | "reschedule_next_week"
   | "reschedule_generic"
   | "next_week"
   | "generic_appointment"
@@ -256,6 +271,30 @@ const requestSchema = z.object({
   senderText: z.string().trim().max(300).optional().default(""),
   customerText: z.string().trim().min(1).max(2000),
   locale: z.enum(["it", "en"]).default("it"),
+  demoServices: z
+    .array(
+      z.object({
+        id: z.string(),
+        name: z.string(),
+        slug: z.string(),
+        durationMinutes: z.number(),
+        priceCents: z.number().nullable(),
+        currency: z.string(),
+        isActive: z.boolean(),
+        aliases: z.array(z.string()),
+      }),
+    )
+    .max(40)
+    .optional(),
+  conversationHistory: z
+    .array(
+      z.object({
+        role: z.enum(["customer", "studio"]),
+        body: z.string().trim().min(1).max(2000),
+      }),
+    )
+    .max(24)
+    .optional(),
 });
 
 const matchedAppointmentSchema = z.object({
@@ -299,6 +338,7 @@ const openAIAnalysisSchema = z.object({
     "delay_notice",
     "cancel_appointment",
     "appointment_lookup",
+    "appointment_confirmation",
     "callback_request",
     "manual_review",
   ]),
@@ -395,30 +435,47 @@ const DEMO_SYSTEM_PROMPT = [
   "Respect relative dates expressed by the customer: 'dopo domani' and 'dopodomani' mean day after tomorrow, not tomorrow.",
   "If the customer proposes a new target date, keep proposed slots on that date first and do not suggest an earlier or different first alternative without a reason.",
   "Do not say the appointment is being moved to tomorrow when the customer asks to move it to the day after tomorrow.",
-  "Use these rescheduling demo rules: Thursday 3 PM moves to Friday 9:30 AM or Friday 11:00 AM; tomorrow moves to tomorrow 4:30 PM or Friday 9:30 AM; otherwise today 3 PM moves to tomorrow 4:30 PM or Friday 11:00 AM.",
+  "Use these rescheduling demo rules: Thursday 3 PM moves to Friday 9:30 AM or Friday 11:00 AM; tomorrow moves to tomorrow 4:30 PM or day after tomorrow 9:30 AM; next week or first availability next week moves to Tuesday 10:00 AM or Wednesday 9:30 AM of next week; otherwise today 3 PM moves to tomorrow 4:30 PM or Friday 11:00 AM.",
+  "Distinguish the current appointment date from the requested new date: 'domani ho un appuntamento' describes the existing slot, not the destination. When the customer asks to move to next week, do not propose tomorrow or day after tomorrow.",
   "For rescheduling to day after tomorrow, set requestedDateTimeText, requestedNewDateText and proposedMoveToText to day after tomorrow, and propose day after tomorrow at 9:30 AM and 11:00 AM.",
   "If the text contains 'sono in ritardo', 'ritardo di X minuti', 'running late', 'late by X minutes', 'possiamo piu tardi', 'possiamo più tardi', or 'can we talk later', classify it as delay_notice.",
   "For delay_notice, do not propose standard future calendar slots. Suggest a nearby time such as in about an hour, later today, or when the customer is free.",
   "Never say that you sent a message.",
   "Never say that you created, changed or deleted a calendar event.",
   "Use the requested locale for every user-visible field.",
+  "Write suggestedReply as a complete professional draft for a medical/dental studio: 4-6 sentences, warm but precise.",
+  "When services are recognized from the catalog, mention each service with indicative duration and price in natural language.",
+  "When proposing slots, name concrete times from demoCalendarFacts or alternatives; explain why a slot fits the combined service duration.",
+  "Greet the patient by first name when senderName is known. Write as if speaking directly to the patient: never mention drafts, internal approval, or that nothing was sent yet.",
   "Return only valid JSON. Do not include markdown.",
 ].join("\n");
 
 export async function POST(request: Request) {
   try {
-    const rateLimit = checkRateLimit(request, { route: "/api/demo/analyze-request", limit: 30 });
+    const rateLimit = await checkRateLimitAsync(request, { route: "/api/demo/analyze-request", limit: 30 });
 
     if (!rateLimit.allowed) {
       return rateLimitResponse(rateLimit);
     }
 
     const body = requestSchema.parse(await request.json());
+    const demoServices = body.demoServices?.map((service) => ({
+      ...service,
+      organizationId: "demo",
+      description: null,
+      sortOrder: 100,
+      createdAt: new Date(0).toISOString(),
+      updatedAt: new Date(0).toISOString(),
+    }));
+    const brainContext = await resolveDemoBrainContext(resolveLocale(body.locale), {
+      services: demoServices,
+    });
     const fallback = buildFallbackAnalysis(body);
 
     if (shouldUseDeterministicDemoAnalysis()) {
+      const enrichedFallback = enrichDemoAnalyzeResultWithContext(fallback, brainContext);
       return Response.json({
-        ...fallback,
+        ...enrichedFallback,
         aiProvider: "heuristic",
         aiModel: null,
         usedFallback: true,
@@ -426,7 +483,7 @@ export async function POST(request: Request) {
     }
 
     const aiResult = await callOpenAIJson({
-      systemPrompt: DEMO_SYSTEM_PROMPT,
+      systemPrompt: `${DEMO_SYSTEM_PROMPT}\n\n${buildDemoBrainSystemPrompt(brainContext)}`,
       schema: openAIAnalysisSchema,
       temperature: 0.2,
       userPrompt: JSON.stringify({
@@ -435,19 +492,14 @@ export async function POST(request: Request) {
         senderText: body.senderText,
         locale: body.locale,
         customerText: body.customerText,
+        conversationHistory: body.conversationHistory ?? [],
         today: dateKey(new Date()),
         demoContacts,
         demoAppointments: demoAppointments.map((appointment) => ({
           ...appointment,
           startsAtText: formatAppointmentStartsAt(appointment, body.locale),
         })),
-        demoCalendarFacts: [
-          "Tomorrow at 15:00 is busy.",
-          "Tomorrow afternoon available slots are 16:30 and 17:15.",
-          "Thursday at 15:00 is busy.",
-          "Friday morning available slots are 9:30 and 11:00.",
-          "Next week morning available slots are Tuesday 10:00 and Wednesday 9:30.",
-        ],
+        demoCalendarFacts: describeDemoScheduleFacts(body.locale, new Date()),
         deterministicFallback: fallback,
         requiredOutput: {
           senderName: "string or null; do not invent if not present",
@@ -478,25 +530,28 @@ export async function POST(request: Request) {
           clarificationQuestion: "question if missing info, else null",
           recommendedNextStep:
             "ask_clarification | propose_slots | propose_reschedule | approve_reply | manual_review",
-          suggestedReply: "brief human draft, never claims execution",
+          suggestedReply: "complete professional draft (4-6 sentences), includes catalog details when relevant, never claims execution",
         },
       }),
     });
 
     if (!aiResult.data) {
+      const enrichedFallback = enrichDemoAnalyzeResultWithContext(fallback, brainContext);
       return Response.json({
-        ...fallback,
+        ...enrichedFallback,
         aiProvider: "heuristic",
         aiModel: aiResult.aiModel ?? readOpenAIConfig().model,
         usedFallback: true,
       } satisfies DemoAnalyzeResponse);
     }
 
-    return Response.json(mergeOpenAIAnalysis(fallback, aiResult.data, {
+    const merged = mergeOpenAIAnalysis(fallback, aiResult.data, {
       aiModel: aiResult.aiModel,
       aiProvider: aiResult.aiProvider,
       usedFallback: aiResult.usedFallback,
-    }));
+    });
+
+    return Response.json(enrichDemoAnalyzeResultWithContext(merged, brainContext));
   } catch (error) {
     return Response.json(
       {
@@ -519,7 +574,9 @@ function mergeOpenAIAnalysis(
     fallback.detectedIntent === "delay_notice" ||
     fallback.detectedIntent === "appointment_lookup" ||
     fallback.detectedIntent === "reschedule_appointment" ||
-    fallback.recommendedNextStep === "propose_slots";
+    fallback.detectedIntent === "appointment_confirmation" ||
+    fallback.recommendedNextStep === "propose_slots" ||
+    fallback.requiresOperatorAttention;
 
   return {
     ...fallback,
@@ -591,41 +648,245 @@ function shouldUseDeterministicDemoAnalysis() {
   return !readOpenAIConfig().apiKey;
 }
 
-function buildFallbackAnalysis(input: z.infer<typeof requestSchema>): DemoAnalyzeResponse {
+function resolveDemoConversationText(input: z.infer<typeof requestSchema>) {
+  const latest = input.customerText.trim();
+  const history = input.conversationHistory ?? [];
+
+  if (history.length === 0) {
+    return latest;
+  }
+
+  const roleLabel = (role: "customer" | "studio", locale: SupportedLocale) =>
+    role === "customer"
+      ? locale === "it"
+        ? "Paziente"
+        : "Patient"
+      : locale === "it"
+        ? "Studio"
+        : "Practice";
+
+  return [...history, { role: "customer" as const, body: latest }]
+    .map((entry) => `${roleLabel(entry.role, resolveLocale(input.locale))}: ${entry.body}`)
+    .join("\n");
+}
+
+function pinCalendarToConfirmedTime(
+  calendar: DemoCalendarResult,
+  confirmedTimeHint: string | null,
+): DemoCalendarResult {
+  if (calendar.alternatives.length === 0) {
+    return calendar;
+  }
+
+  let matched = calendar.alternatives[0];
+
+  const tryMatchTime = (timeText: string) => {
+    const parts = timeText.replace(".", ":").split(":");
+    const hours = Number(parts[0]);
+    const minutes = parts.length > 1 && parts[1] !== "" ? Number(parts[1]) : 0;
+    if (Number.isNaN(hours) || Number.isNaN(minutes)) {
+      return;
+    }
+
+    const found = calendar.alternatives.find((slot) => {
+      const startsAt = new Date(slot.startsAt);
+      return startsAt.getHours() === hours && startsAt.getMinutes() === minutes;
+    });
+
+    if (found) {
+      matched = found;
+    }
+  };
+
+  if (confirmedTimeHint) {
+    tryMatchTime(confirmedTimeHint);
+  }
+
+  return {
+    ...calendar,
+    alternatives: [matched, ...calendar.alternatives.filter((slot) => slot !== matched)],
+  };
+}
+
+function formatConfirmedSlotLabel(
+  calendar: DemoCalendarResult,
+  slot: AvailabilitySlot,
+  locale: SupportedLocale,
+) {
+  const time = formatSlotTime(slot.startsAt, locale);
+
+  if (
+    calendar.scenario === "tomorrow" ||
+    calendar.scenario === "tomorrow_morning" ||
+    calendar.scenario === "tomorrow_afternoon" ||
+    calendar.scenario === "tomorrow_15"
+  ) {
+    return locale === "it" ? `domani alle ${time}` : `tomorrow at ${time}`;
+  }
+
+  if (calendar.requestedDateTimeText) {
+    return locale === "it"
+      ? `${calendar.requestedDateTimeText} alle ${time}`
+      : `${calendar.requestedDateTimeText} at ${time}`;
+  }
+
+  return locale === "it" ? `alle ${time}` : `at ${time}`;
+}
+
+function buildAppointmentConfirmationSuggestedReply(
+  locale: SupportedLocale,
+  sender: SenderIdentity,
+  confirmedSlotLabel: string,
+) {
+  const firstName = getReplyFirstName(sender);
+
+  if (locale === "en") {
+    return firstName
+      ? `Perfect ${firstName}, I confirm ${confirmedSlotLabel}. See you then!`
+      : `Perfect, I confirm ${confirmedSlotLabel}. See you then!`;
+  }
+
+  return firstName
+    ? `Perfetto ${firstName}, confermo per ${confirmedSlotLabel}. A presto!`
+    : `Perfetto, confermo per ${confirmedSlotLabel}. A presto!`;
+}
+
+function buildAppointmentConfirmationAnalysis(
+  input: z.infer<typeof requestSchema>,
+  confirmationFollowUp: NonNullable<ReturnType<typeof detectDemoAppointmentConfirmationFollowUp>>,
+): DemoAnalyzeResponse {
   const locale = resolveLocale(input.locale);
+
+  const sender = resolveSenderIdentity(
+    input.channel,
+    input.senderText,
+    confirmationFollowUp.originalRequestText,
+    locale,
+  );
+  const reason = detectAppointmentReason(confirmationFollowUp.originalRequestText, locale);
+  const calendar = pinCalendarToConfirmedTime(
+    resolveDemoCalendar(confirmationFollowUp.originalRequestText, "new_appointment", locale, reason),
+    confirmationFollowUp.confirmedTimeHint,
+  );
+  const confirmedSlot = calendar.alternatives[0] ?? null;
+  const confirmedSlotLabel = confirmedSlot
+    ? formatConfirmedSlotLabel(calendar, confirmedSlot, locale)
+    : formatAlternativeTimes(calendar, locale);
+  const suggestedReply = buildAppointmentConfirmationSuggestedReply(locale, sender, confirmedSlotLabel);
+  const summary =
+    locale === "it"
+      ? `Il paziente ha confermato l'orario proposto (${confirmedSlotLabel}).`
+      : `The patient confirmed the proposed time (${confirmedSlotLabel}).`;
+  const matchedAppointment = matchAppointment(sender, confirmationFollowUp.originalRequestText, "new_appointment", locale);
+
+  return {
+    channel: input.channel,
+    senderText: sender.senderText,
+    customerText: input.customerText,
+    locale,
+    detectedIntent: "appointment_confirmation",
+    isAppointmentRequest: true,
+    confidence: 0.96,
+    customerName: sender.customerIdentified ? sender.contact?.name ?? sender.senderName : null,
+    senderName: sender.senderName,
+    senderContact: sender.senderContact,
+    senderSource: input.channel,
+    customerIdentified: sender.customerIdentified,
+    appointmentContextType: "new_appointment",
+    matchedAppointment,
+    summary,
+    appointmentRequests: [],
+    hasMultipleRequests: false,
+    primaryRequestSummary: "",
+    linkedAppointments: [],
+    hasLinkedAppointments: false,
+    cancellationScope: null,
+    isThirdPartyRequest: false,
+    referredPersonName: null,
+    referredPersonPhone: null,
+    referredByName: null,
+    referredByContact: null,
+    urgency: "normal",
+    contactActionType: null,
+    requestedDateTimeText: confirmedSlotLabel,
+    requestedNewDateText: null,
+    proposedMoveToText: null,
+    requestedStartsAt: confirmedSlot?.startsAt ?? calendar.requestedStartsAt,
+    requestedEndsAt: confirmedSlot?.endsAt ?? calendar.requestedEndsAt,
+    reason,
+    needsCalendarCheck: false,
+    conflictDetected: false,
+    alternatives: calendar.alternatives,
+    suggestedReply,
+    needsMoreInfo: false,
+    needsClarification: false,
+    clarificationQuestion: null,
+    missingFields: [],
+    recommendedNextStep: "approve_reply",
+    requiresOperatorAttention: false,
+    operatorAttentionCategory: null,
+    safetyNotes: buildSafetyNotes(locale),
+    demoSuggestedAction: selectSuggestedAction(input.channel, "appointment_confirmation", false),
+    aiProvider: "heuristic",
+    aiModel: readOpenAIConfig().model,
+    usedFallback: true,
+  };
+}
+
+function buildFallbackAnalysis(input: z.infer<typeof requestSchema>): DemoAnalyzeResponse {
+  const confirmationFollowUp = detectDemoAppointmentConfirmationFollowUp(
+    input.conversationHistory ?? [],
+    input.customerText,
+  );
+
+  if (confirmationFollowUp) {
+    return buildAppointmentConfirmationAnalysis(input, confirmationFollowUp);
+  }
+
+  const locale = resolveLocale(input.locale);
+  const conversationText = resolveDemoConversationText(input);
   const sender = resolveSenderIdentity(input.channel, input.senderText, input.customerText, locale);
-  const multipleAppointmentRequests = buildMultipleAppointmentRequests(input.customerText, locale);
+  const multipleAppointmentRequests = buildMultipleAppointmentRequests(conversationText, locale);
   const hasMultipleRequests = multipleAppointmentRequests.length > 1;
-  const thirdParty = buildThirdPartyRequestContext(input.customerText, locale, sender);
+  const thirdParty = buildThirdPartyRequestContext(conversationText, locale, sender);
   const isThirdPartyRequest = thirdParty.isThirdPartyRequest;
-  const cancellation = buildCancellationContext(input.customerText, locale, sender);
+  const cancellation = buildCancellationContext(conversationText, locale, sender);
   const isCancellationRequest = cancellation.isCancellationRequest;
   const detectedIntent = isCancellationRequest
     ? "cancel_appointment"
-    : hasMultipleRequests || isThirdPartyRequest ? "new_appointment" : detectIntent(input.customerText);
-  const reason = thirdParty.reason ?? detectAppointmentReason(input.customerText, locale);
-  const requestUrgency = isThirdPartyRequest ? thirdParty.urgency : detectRequestUrgency(input.customerText);
+    : hasMultipleRequests || isThirdPartyRequest ? "new_appointment" : detectIntent(conversationText);
+  const reason = thirdParty.reason ?? detectAppointmentReason(conversationText, locale);
+  const requestUrgency = isThirdPartyRequest ? thirdParty.urgency : detectRequestUrgency(conversationText);
   const calendar = isCancellationRequest
     ? calendarFromCancellation(cancellation, locale)
     : isThirdPartyRequest
     ? calendarFromThirdPartyRequest(thirdParty, locale)
     : hasMultipleRequests
     ? calendarFromMultipleAppointmentRequests(multipleAppointmentRequests)
-    : resolveDemoCalendar(input.customerText, detectedIntent, locale, reason);
-  const matchedAppointment = matchAppointment(sender, input.customerText, detectedIntent, locale);
-  const requestedNewDateText = resolveRequestedNewDateText(input.customerText, detectedIntent, calendar, locale);
+    : resolveDemoCalendar(conversationText, detectedIntent, locale, reason);
+  const matchedAppointment = matchAppointment(sender, conversationText, detectedIntent, locale);
+  const requestedNewDateText = resolveRequestedNewDateText(conversationText, detectedIntent, calendar, locale);
   const proposedMoveToText = requestedNewDateText;
   const appointmentContextType = resolveAppointmentContextType(detectedIntent);
-  const clarification = resolveClarification({
-    locale,
-    intent: detectedIntent,
+  const operatorAttention = detectOperatorAttentionRequired(
+    conversationText,
+    detectedIntent,
     reason,
-    sender,
-    matchedAppointment,
-    calendar,
-    customerText: input.customerText,
-  });
-  const recommendedNextStep = isThirdPartyRequest
+  );
+  const clarification = operatorAttention.required
+    ? { key: null, question: null }
+    : resolveClarification({
+        locale,
+        intent: detectedIntent,
+        reason,
+        sender,
+        matchedAppointment,
+        calendar,
+        customerText: input.customerText,
+      });
+  const recommendedNextStep = operatorAttention.required
+    ? "manual_review"
+    : isThirdPartyRequest
     ? thirdParty.missingFields.length > 0 ? "ask_clarification" : "approve_reply"
     : isCancellationRequest
       ? "approve_reply"
@@ -635,7 +896,7 @@ function buildFallbackAnalysis(input: z.infer<typeof requestSchema>): DemoAnalyz
     clarificationQuestion: clarification.question,
     matchedAppointment,
   });
-  const needsClarification = recommendedNextStep === "ask_clarification";
+  const needsClarification = !operatorAttention.required && recommendedNextStep === "ask_clarification";
   const missingFields = isThirdPartyRequest
     ? thirdParty.missingFields
     : isCancellationRequest
@@ -652,7 +913,9 @@ function buildFallbackAnalysis(input: z.infer<typeof requestSchema>): DemoAnalyz
   const primaryRequestSummary = hasMultipleRequests
     ? buildMultipleAppointmentPrimarySummary(multipleAppointmentRequests, locale)
     : "";
-  const summary = isThirdPartyRequest
+  const summary = operatorAttention.required
+    ? buildOperatorAttentionSummary(operatorAttention, locale)
+    : isThirdPartyRequest
     ? buildThirdPartySummary(thirdParty, locale)
     : isCancellationRequest
       ? buildCancellationSummary(cancellation, sender, locale)
@@ -670,7 +933,9 @@ function buildFallbackAnalysis(input: z.infer<typeof requestSchema>): DemoAnalyz
     recommendedNextStep,
     urgency: requestUrgency,
   });
-  const suggestedReply = isThirdPartyRequest
+  const suggestedReply = operatorAttention.required
+    ? ""
+    : isThirdPartyRequest
     ? buildThirdPartySuggestedReply(thirdParty, locale)
     : isCancellationRequest
       ? buildCancellationSuggestedReply(cancellation, sender, locale)
@@ -687,6 +952,7 @@ function buildFallbackAnalysis(input: z.infer<typeof requestSchema>): DemoAnalyz
     clarificationQuestion: clarification.question,
     recommendedNextStep,
     urgency: requestUrgency,
+    customerText: input.customerText,
   });
 
   return {
@@ -694,8 +960,10 @@ function buildFallbackAnalysis(input: z.infer<typeof requestSchema>): DemoAnalyz
     senderText: sender.senderText,
     customerText: input.customerText,
     locale,
-    detectedIntent,
-    isAppointmentRequest: detectedIntent === "new_appointment" || detectedIntent === "reschedule_appointment" || detectedIntent === "cancel_appointment" || detectedIntent === "appointment_lookup",
+    detectedIntent: operatorAttention.required ? "manual_review" : detectedIntent,
+    isAppointmentRequest: operatorAttention.required
+      ? false
+      : detectedIntent === "new_appointment" || detectedIntent === "reschedule_appointment" || detectedIntent === "cancel_appointment" || detectedIntent === "appointment_lookup",
     confidence: isThirdPartyRequest
       ? thirdParty.missingFields.length > 0 ? 0.93 : 0.95
       : isCancellationRequest
@@ -742,13 +1010,23 @@ function buildFallbackAnalysis(input: z.infer<typeof requestSchema>): DemoAnalyz
     suggestedReply,
     needsMoreInfo: isThirdPartyRequest ? thirdParty.missingFields.length > 0 : hasMultipleRequests ? multipleAppointmentRequests.some((request) => request.needsClarification) : missingFields.length > 0,
     needsClarification: isThirdPartyRequest ? thirdParty.missingFields.length > 0 : hasMultipleRequests ? multipleAppointmentRequests.some((request) => request.needsClarification) : needsClarification,
-    clarificationQuestion: isThirdPartyRequest ? thirdParty.clarificationQuestion : clarification.question,
+    clarificationQuestion: operatorAttention.required
+      ? null
+      : isThirdPartyRequest
+        ? thirdParty.clarificationQuestion
+        : clarification.question,
     missingFields,
-    recommendedNextStep: hasMultipleRequests && multipleAppointmentRequests.some((request) => request.needsClarification)
+    recommendedNextStep: operatorAttention.required
+      ? "manual_review"
+      : hasMultipleRequests && multipleAppointmentRequests.some((request) => request.needsClarification)
       ? "ask_clarification"
       : recommendedNextStep,
+    requiresOperatorAttention: operatorAttention.required,
+    operatorAttentionCategory: operatorAttention.category,
     safetyNotes: buildSafetyNotes(locale),
-    demoSuggestedAction: selectSuggestedAction(input.channel, detectedIntent, missingFields.length > 0),
+    demoSuggestedAction: operatorAttention.required
+      ? "manual_review"
+      : selectSuggestedAction(input.channel, detectedIntent, missingFields.length > 0),
     aiProvider: "heuristic",
     aiModel: readOpenAIConfig().model,
     usedFallback: true,
@@ -784,27 +1062,29 @@ function resolveSenderIdentity(
 }
 
 function defaultSender(channel: DemoPlaygroundChannel, locale: SupportedLocale) {
+  const mario = demoContacts[0];
+
   if (locale === "en") {
     if (channel === "whatsapp") {
-      return "WhatsApp customer";
+      return `${mario.name} · ${mario.whatsapp}`;
     }
 
     if (channel === "quick_call") {
-      return "Phone call customer";
+      return `${mario.name} · ${mario.whatsapp}`;
     }
 
-    return "Email customer";
+    return `${mario.name} <${mario.email}>`;
   }
 
   if (channel === "whatsapp") {
-    return "Cliente WhatsApp";
+    return `${mario.name} · ${mario.whatsapp}`;
   }
 
   if (channel === "quick_call") {
-    return "Cliente da telefonata";
+    return `${mario.name} · ${mario.whatsapp}`;
   }
 
-  return "Cliente email";
+  return `${mario.name} <${mario.email}>`;
 }
 
 function extractContact(senderText: string) {
@@ -861,6 +1141,116 @@ function matchDemoContact(input: {
       (normalizedName && (normalizedName.includes(contactName) || normalizedName.includes(firstName))),
     );
   }) ?? null;
+}
+
+type OperatorAttentionCategory = "billing" | "complaint" | "medical_advice" | "certificate" | "general";
+
+type OperatorAttentionResult = {
+  required: boolean;
+  category: OperatorAttentionCategory | null;
+};
+
+function detectOperatorAttentionRequired(
+  text: string,
+  intent: DemoDetectedIntent,
+  reason: string | null,
+): OperatorAttentionResult {
+  const normalized = normalizeText(text);
+  const empty: OperatorAttentionResult = { required: false, category: null };
+
+  if (!normalized) {
+    return empty;
+  }
+
+  if (
+    ["cancel_appointment", "delay_notice", "reschedule_appointment", "appointment_lookup", "callback_request"].includes(
+      intent,
+    )
+  ) {
+    return empty;
+  }
+
+  if (
+    intent === "new_appointment" &&
+    !reason &&
+    /\b(disponibil|domani|mattina|pomeriggio|oggi|passare|fissare|prenot)\b/.test(normalized)
+  ) {
+    return empty;
+  }
+
+  const rules: Array<{ category: OperatorAttentionCategory; pattern: RegExp }> = [
+    {
+      category: "billing",
+      pattern:
+        /\b(fattura|fatture|ricevuta|ricevute|importo|pagamento|pagato|pagare|rimborso|nota di credito|addebito|bonifico|satispay|pos|scontrino|bollo|iva|insoluto)\b/,
+    },
+    {
+      category: "complaint",
+      pattern:
+        /\b(reclamo|lamentela|lamentele|insoddisfatt|arrabbiat|pessimo|inaccettabile|protesta|segnalazione negativa|non mi va bene)\b/,
+    },
+    {
+      category: "medical_advice",
+      pattern:
+        /\b(farmaco|farmaci|antibiotico|antibiotici|effetti collaterali|non funziona|cosa devo prendere|cosa devo fare|mi ha prescritto|prescrizione|dosaggio|effetto|reazione)\b/,
+    },
+    {
+      category: "certificate",
+      pattern: /\b(certificato|certificati|attestato|malattia|infortunio|idoneita|idoneità|documento medico)\b/,
+    },
+  ];
+
+  for (const rule of rules) {
+    if (!rule.pattern.test(normalized)) {
+      continue;
+    }
+
+    if (
+      rule.category === "medical_advice" &&
+      /\b(appuntamento|disponibil|prenot|urgenza per|igiene|visita|controllo)\b/.test(normalized) &&
+      !/\b(farmaco|farmaci|antibiotico|prescritt|dosaggio|effetti collaterali|non funziona)\b/.test(normalized)
+    ) {
+      continue;
+    }
+
+    return { required: true, category: rule.category };
+  }
+
+  if (intent === "manual_review" && /\b(appuntamento|disponibil|prenot|visita|preventivo|igiene|pulizia)\b/.test(normalized)) {
+    return empty;
+  }
+
+  if (intent === "manual_review") {
+    return { required: true, category: "general" };
+  }
+
+  return empty;
+}
+
+function buildOperatorAttentionSummary(operatorAttention: OperatorAttentionResult, locale: SupportedLocale) {
+  if (locale === "en") {
+    const labels: Record<OperatorAttentionCategory, string> = {
+      billing: "Administrative or billing request that should be handled manually.",
+      complaint: "Possible complaint that needs direct staff attention.",
+      medical_advice: "Clinical or medication question that should not be automated.",
+      certificate: "Certificate or documentation request that needs internal review.",
+      general: "Request not safely handled automatically.",
+    };
+
+    return operatorAttention.category
+      ? labels[operatorAttention.category]
+      : "Request requires manual review.";
+  }
+
+  const labels: Record<OperatorAttentionCategory, string> = {
+    billing: "Richiesta amministrativa o di fatturazione da gestire manualmente.",
+    complaint: "Possibile reclamo che richiede attenzione diretta dello staff.",
+    medical_advice: "Richiesta di parere clinico o su farmaci da non automatizzare.",
+    certificate: "Richiesta di certificato o documentazione da verificare internamente.",
+    general: "Richiesta non gestibile in automatico con sicurezza.",
+  };
+
+  return operatorAttention.category ? labels[operatorAttention.category] : "Richiesta da rivedere manualmente.";
 }
 
 function detectIntent(text: string): DemoDetectedIntent {
@@ -964,6 +1354,60 @@ function hasFirstAvailabilitySignal(normalizedText: string) {
   return /(?:prima disponibilita(?: utile)?|first available(?: slot)?|earliest availability)/.test(normalizedText);
 }
 
+function demoAlternativesForDay(
+  day: Date,
+  options: { preferMorning?: boolean; preferAfternoon?: boolean; maxSlots?: number } = {},
+) {
+  return findDemoFreeSlots(day, {
+    maxSlots: options.maxSlots ?? 2,
+    durationMinutes: 45,
+    preferMorning: options.preferMorning,
+    preferAfternoon: options.preferAfternoon,
+  });
+}
+
+function demoAlternativesAcrossDays(...days: Date[]) {
+  const alternatives: AvailabilitySlot[] = [];
+
+  for (const day of days) {
+    alternatives.push(...demoAlternativesForDay(day, { maxSlots: 1 }));
+    if (alternatives.length >= 2) {
+      break;
+    }
+  }
+
+  return alternatives.slice(0, 2);
+}
+
+function demoCalendarWithRequestedTime(
+  day: Date,
+  hour: number,
+  minute: number,
+  requestedDateTimeText: string,
+  scenario: DemoCalendarResult["scenario"],
+  options: { durationMinutes?: number; alternativeDay?: Date; preferMorning?: boolean; preferAfternoon?: boolean } = {},
+) {
+  const durationMinutes = options.durationMinutes ?? 45;
+  const requestedStart = atLocal(dateKey(day), hour, minute);
+  const conflictDetected = isDemoSlotBusy(day, hour, minute, durationMinutes);
+  const alternativeDay = options.alternativeDay ?? day;
+
+  return {
+    requestedDateTimeText,
+    requestedStartsAt: requestedStart.toISOString(),
+    requestedEndsAt: addMinutes(requestedStart, durationMinutes).toISOString(),
+    needsCalendarCheck: true,
+    conflictDetected,
+    alternatives: conflictDetected
+      ? demoAlternativesForDay(alternativeDay, {
+          preferMorning: options.preferMorning,
+          preferAfternoon: options.preferAfternoon ?? (!options.preferMorning && hour >= 14),
+        })
+      : demoAlternativesForDay(day),
+    scenario,
+  } satisfies DemoCalendarResult;
+}
+
 function resolveDemoCalendar(
   text: string,
   intent: DemoDetectedIntent,
@@ -1010,7 +1454,16 @@ function resolveDemoCalendar(
   const nextWednesday = addDays(nextMonday, 2);
 
   if (intent === "reschedule_appointment") {
-    return resolveDemoRescheduleCalendar(normalized, locale, now, tomorrow, dayAfterTomorrow, friday);
+    return resolveDemoRescheduleCalendar(
+      normalized,
+      locale,
+      now,
+      tomorrow,
+      dayAfterTomorrow,
+      friday,
+      nextTuesday,
+      nextWednesday,
+    );
   }
 
   if (intent === "new_appointment" && reason && detectRequestUrgency(text) === "urgent") {
@@ -1022,7 +1475,7 @@ function resolveDemoCalendar(
       requestedEndsAt: null,
       needsCalendarCheck: true,
       conflictDetected: false,
-      alternatives: [toSlot(now, 16, 30), toSlot(tomorrow, 9, 30)],
+      alternatives: demoAlternativesAcrossDays(now, tomorrow),
       scenario: "urgent_first_available",
     };
   }
@@ -1042,7 +1495,7 @@ function resolveDemoCalendar(
       requestedEndsAt: null,
       needsCalendarCheck: true,
       conflictDetected: false,
-      alternatives: [toSlot(dayAfterTomorrow, 9, 30), toSlot(dayAfterTomorrow, 11, 0)],
+      alternatives: demoAlternativesForDay(dayAfterTomorrow, { preferMorning: true }),
       scenario: "generic_appointment",
     };
   }
@@ -1054,7 +1507,7 @@ function resolveDemoCalendar(
       requestedEndsAt: null,
       needsCalendarCheck: true,
       conflictDetected: false,
-      alternatives: [toSlot(tomorrow, 16, 30), toSlot(tomorrow, 17, 15)],
+      alternatives: demoAlternativesForDay(tomorrow, { preferAfternoon: true }),
       scenario: "tomorrow_afternoon",
     };
   }
@@ -1066,23 +1519,20 @@ function resolveDemoCalendar(
       requestedEndsAt: null,
       needsCalendarCheck: true,
       conflictDetected: false,
-      alternatives: [toSlot(tomorrow, 9, 30), toSlot(tomorrow, 11, 0)],
+      alternatives: demoAlternativesForDay(tomorrow, { preferMorning: true }),
       scenario: "tomorrow_morning",
     };
   }
 
   if (hasTomorrow(normalized) && hasThreePm(normalized)) {
-    const requestedStart = atLocal(dateKey(tomorrow), 15, 0);
-
-    return {
-      requestedDateTimeText: locale === "it" ? "domani alle 15:00" : "tomorrow at 3:00 PM",
-      requestedStartsAt: requestedStart.toISOString(),
-      requestedEndsAt: addMinutes(requestedStart, 30).toISOString(),
-      needsCalendarCheck: true,
-      conflictDetected: true,
-      alternatives: [toSlot(tomorrow, 16, 30), toSlot(tomorrow, 17, 15)],
-      scenario: "tomorrow_15",
-    };
+    return demoCalendarWithRequestedTime(
+      tomorrow,
+      15,
+      0,
+      locale === "it" ? "domani alle 15:00" : "tomorrow at 3:00 PM",
+      "tomorrow_15",
+      { preferAfternoon: true },
+    );
   }
 
   if (hasTomorrow(normalized)) {
@@ -1092,30 +1542,36 @@ function resolveDemoCalendar(
       requestedEndsAt: null,
       needsCalendarCheck: true,
       conflictDetected: false,
-      alternatives: [toSlot(tomorrow, 9, 30), toSlot(tomorrow, 11, 0)],
+      alternatives: demoAlternativesForDay(tomorrow),
       scenario: "tomorrow",
     };
   }
 
-  if (hasThursday(normalized) && hasThreePm(normalized)) {
-    const requestedStart = appointmentDate({
-      title: "",
-      customerName: "",
-      day: "thursday",
-      hour: 15,
-      minute: 0,
-      reason: "",
-      reasonEn: "",
-    });
+  if (hasThursday(normalized)) {
+    const thursday = resolveNamedWeekday(now, 4);
+
+    if (hasThreePm(normalized)) {
+      return demoCalendarWithRequestedTime(
+        thursday,
+        15,
+        0,
+        locale === "it" ? "giovedì alle 15:00" : "Thursday at 3:00 PM",
+        "thursday_15",
+        { alternativeDay: friday, preferMorning: true },
+      );
+    }
 
     return {
-      requestedDateTimeText: locale === "it" ? "giovedì alle 15:00" : "Thursday at 3:00 PM",
-      requestedStartsAt: requestedStart.toISOString(),
-      requestedEndsAt: addMinutes(requestedStart, 30).toISOString(),
+      requestedDateTimeText: locale === "it" ? "giovedì" : "Thursday",
+      requestedStartsAt: null,
+      requestedEndsAt: null,
       needsCalendarCheck: true,
-      conflictDetected: true,
-      alternatives: [toSlot(friday, 9, 30), toSlot(friday, 11, 0)],
-      scenario: "thursday_15",
+      conflictDetected: false,
+      alternatives: demoAlternativesForDay(thursday, {
+        preferMorning: hasMorning(normalized) ? true : undefined,
+        preferAfternoon: hasAfternoon(normalized) ? true : undefined,
+      }),
+      scenario: "thursday",
     };
   }
 
@@ -1126,7 +1582,10 @@ function resolveDemoCalendar(
       requestedEndsAt: null,
       needsCalendarCheck: true,
       conflictDetected: false,
-      alternatives: [toSlot(nextTuesday, 10, 0), toSlot(nextWednesday, 15, 30)],
+      alternatives: [
+        ...demoAlternativesForDay(nextTuesday, { maxSlots: 1, preferMorning: true }),
+        ...demoAlternativesForDay(nextWednesday, { maxSlots: 1, preferMorning: true }),
+      ].slice(0, 2),
       scenario: "next_week",
     };
   }
@@ -1137,7 +1596,7 @@ function resolveDemoCalendar(
     requestedEndsAt: null,
     needsCalendarCheck: true,
     conflictDetected: false,
-    alternatives: [toSlot(tomorrow, 16, 30), toSlot(tomorrow, 17, 15)],
+    alternatives: demoAlternativesForDay(tomorrow, { preferAfternoon: true }),
     scenario: "generic_appointment",
   };
 }
@@ -1481,7 +1940,7 @@ function calendarFromThirdPartyRequest(
     requestedEndsAt: null,
     needsCalendarCheck: true,
     conflictDetected: false,
-    alternatives: [toSlot(tomorrow, 9, 30), toSlot(tomorrow, 11, 0)],
+    alternatives: demoAlternativesForDay(tomorrow),
     scenario: "generic_appointment",
   };
 }
@@ -1616,7 +2075,24 @@ function formatThirdPartyReason(reason: string, locale: SupportedLocale) {
 }
 
 function formatReasonForReply(reason: string, locale: SupportedLocale) {
-  return formatThirdPartyReason(reason, locale);
+  if (locale !== "it") {
+    return formatThirdPartyReason(reason, locale);
+  }
+
+  const replyPhraseByReason: Record<string, string> = {
+    preventivo: "il preventivo",
+    "igiene dentale": "l'igiene dentale",
+    consulenza: "la consulenza",
+    controllo: "il controllo",
+    visita: "la visita",
+    sopralluogo: "il sopralluogo",
+    "appuntamento urgente": "l'appuntamento urgente",
+    "urgenza per carie": "l'urgenza per una carie",
+    "urgenza per dolore ai denti": "l'urgenza per dolore ai denti",
+    "prima disponibilità utile": "la prima disponibilità utile",
+  };
+
+  return replyPhraseByReason[reason] ?? reason;
 }
 
 function formatNullableContactName(value: string | null, locale: SupportedLocale) {
@@ -1721,18 +2197,24 @@ function getMultipleAppointmentAlternativeSlots(kind: MultipleAppointmentKind, n
   const nextWednesday = addDays(nextMonday, 2);
 
   if (kind === "tomorrow_morning") {
-    return [toSlot(tomorrow, 9, 30), toSlot(tomorrow, 11, 0)];
+    return demoAlternativesForDay(tomorrow, { preferMorning: true });
   }
 
   if (kind === "tomorrow_afternoon") {
-    return [toSlot(tomorrow, 16, 30), toSlot(tomorrow, 17, 15)];
+    return demoAlternativesForDay(tomorrow, { preferAfternoon: true });
   }
 
   if (kind === "next_week_morning") {
-    return [toSlot(nextTuesday, 10, 0), toSlot(nextWednesday, 9, 30)];
+    return [
+      ...demoAlternativesForDay(nextTuesday, { maxSlots: 1, preferMorning: true }),
+      ...demoAlternativesForDay(nextWednesday, { maxSlots: 1, preferMorning: true }),
+    ].slice(0, 2);
   }
 
-  return [toSlot(nextTuesday, 10, 0), toSlot(nextWednesday, 15, 30)];
+  return [
+    ...demoAlternativesForDay(nextTuesday, { maxSlots: 1, preferMorning: true }),
+    ...demoAlternativesForDay(nextWednesday, { maxSlots: 1 }),
+  ].slice(0, 2);
 }
 
 function labelMultipleAppointmentDate(kind: MultipleAppointmentKind, locale: SupportedLocale) {
@@ -1909,6 +2391,200 @@ function formatMultipleAppointmentReplyAlternatives(
     .join(locale === "it" ? " oppure " : " or ");
 }
 
+function extractRescheduleTargetText(normalizedText: string) {
+  const patterns = [
+    /\b(?:spost(?:are|arlo|ami|arlo)|rimandare|posticipare)\b[^.?!]*?\b(?:alla?|al|per|verso)\s+(.+)$/,
+    /\b(?:move|reschedule)(?:\s+it)?\s+(?:to|for)\s+(.+)$/,
+  ];
+
+  for (const pattern of patterns) {
+    const match = normalizedText.match(pattern);
+
+    if (match?.[1]) {
+      return normalizeText(match[1].trim());
+    }
+  }
+
+  return normalizedText;
+}
+
+function getRescheduleDateSourceText(normalizedText: string) {
+  return extractRescheduleTargetText(normalizedText);
+}
+
+function isTomorrowCurrentAppointmentReference(normalizedText: string) {
+  if (/\b(?:spost|rimand|posticip|move|reschedule)\b/.test(normalizedText)) {
+    const dateSource = getRescheduleDateSourceText(normalizedText);
+
+    if (dateSource !== normalizedText) {
+      return /\b(?:domani\s+ho\s+(?:un\s+)?appuntamento|ho\s+(?:un\s+)?appuntamento\s+(?:per\s+|fissato\s+per\s+)?domani)\b/.test(
+        normalizedText,
+      );
+    }
+
+    return false;
+  }
+
+  return /\b(?:domani\s+ho\s+(?:un\s+)?appuntamento|ho\s+(?:un\s+)?appuntamento\s+(?:per\s+|fissato\s+per\s+)?domani)\b/.test(
+    normalizedText,
+  );
+}
+
+function resolveRescheduleTargetKind(normalizedText: string): DemoRequestedDateKind {
+  const dateSource = getRescheduleDateSourceText(normalizedText);
+
+  if (hasNextWeek(dateSource) || (hasFirstAvailabilitySignal(dateSource) && hasNextWeek(normalizedText))) {
+    return "next_week";
+  }
+
+  if (hasDayAfterTomorrow(dateSource)) {
+    return "day_after_tomorrow";
+  }
+
+  if (hasThursday(dateSource) && hasThreePm(normalizedText)) {
+    return "thursday";
+  }
+
+  if (hasTomorrow(dateSource) && !isTomorrowCurrentAppointmentReference(normalizedText)) {
+    return "tomorrow";
+  }
+
+  if (hasTomorrow(dateSource) && /\b(?:a|al|alla|per)\s+(?:il\s+)?domani\b/.test(dateSource)) {
+    return "tomorrow";
+  }
+
+  if (isTomorrowCurrentAppointmentReference(normalizedText) && hasNextWeek(normalizedText)) {
+    return "next_week";
+  }
+
+  if (hasTomorrow(normalizedText) && !isTomorrowCurrentAppointmentReference(normalizedText)) {
+    return "tomorrow";
+  }
+
+  return "unknown";
+}
+
+function requestsSameAppointmentTime(normalizedText: string) {
+  return /\b(?:stesso\s+orario|allo\s+stesso\s+orario|medesimo\s+orario|same\s+time|at\s+the\s+same\s+time)\b/.test(
+    normalizedText,
+  );
+}
+
+function extractClockTimeFromStartsAtText(
+  startsAtText: string | null,
+  locale: SupportedLocale,
+): { hour: number; minute: number; formatted: string } | null {
+  if (!startsAtText) {
+    return null;
+  }
+
+  const italianMatch = startsAtText.match(/alle\s+(\d{1,2}):(\d{2})/i);
+  if (italianMatch) {
+    const hour = Number(italianMatch[1]);
+    const minute = Number(italianMatch[2]);
+    return { hour, minute, formatted: `${hour}:${italianMatch[2]}` };
+  }
+
+  const englishMatch = startsAtText.match(/(\d{1,2}):(\d{2})\s*(am|pm)/i);
+  if (englishMatch) {
+    let hour = Number(englishMatch[1]);
+    const minute = Number(englishMatch[2]);
+    const meridiem = englishMatch[3].toLowerCase();
+
+    if (meridiem === "pm" && hour !== 12) {
+      hour += 12;
+    }
+
+    if (meridiem === "am" && hour === 12) {
+      hour = 0;
+    }
+
+    return {
+      hour,
+      minute,
+      formatted: `${englishMatch[1]}:${englishMatch[2]} ${englishMatch[3].toUpperCase()}`,
+    };
+  }
+
+  if (locale === "it" && hasThreePm(startsAtText)) {
+    return { hour: 15, minute: 0, formatted: "15:00" };
+  }
+
+  if (locale === "en" && hasThreePm(startsAtText)) {
+    return { hour: 15, minute: 0, formatted: "3:00 PM" };
+  }
+
+  return null;
+}
+
+function isPreferredSlotAvailable(alternatives: AvailabilitySlot[], hour: number, minute: number) {
+  return alternatives.some((slot) => {
+    const date = new Date(slot.startsAt);
+    return date.getHours() === hour && date.getMinutes() === minute;
+  });
+}
+
+function formatRescheduleTargetDateLabel(scenario: DemoCalendarScenario, locale: SupportedLocale) {
+  if (scenario === "reschedule_day_after_tomorrow") {
+    return locale === "it" ? "dopodomani" : "the day after tomorrow";
+  }
+
+  if (scenario === "reschedule_next_week") {
+    return locale === "it" ? "la prossima settimana" : "next week";
+  }
+
+  if (scenario === "reschedule_tomorrow") {
+    return locale === "it" ? "domani" : "tomorrow";
+  }
+
+  if (scenario === "thursday_15") {
+    return locale === "it" ? "venerdì" : "Friday";
+  }
+
+  return locale === "it" ? "una nuova data" : "a new date";
+}
+
+function resolvePreferredRescheduleSlot(input: {
+  customerText: string;
+  matchedAppointment: MatchedAppointment;
+  calendar: DemoCalendarResult;
+  locale: SupportedLocale;
+}) {
+  const normalized = normalizeText(input.customerText);
+
+  if (requestsSameAppointmentTime(normalized)) {
+    const currentTime = extractClockTimeFromStartsAtText(input.matchedAppointment.startsAtText, input.locale);
+    if (!currentTime) {
+      return null;
+    }
+
+    const targetDate = formatRescheduleTargetDateLabel(input.calendar.scenario, input.locale);
+    const slotText =
+      input.locale === "it"
+        ? `${targetDate} alle ${currentTime.formatted}`
+        : `${targetDate} at ${currentTime.formatted}`;
+
+    return { ...currentTime, slotText };
+  }
+
+  if (input.calendar.requestedDateTimeText && hasThreePm(normalized)) {
+    const currentTime = extractClockTimeFromStartsAtText(
+      input.locale === "it" ? "alle 15:00" : "3:00 PM",
+      input.locale,
+    );
+    if (!currentTime) {
+      return null;
+    }
+
+    return {
+      ...currentTime,
+      slotText: input.calendar.requestedDateTimeText,
+    };
+  }
+
+  return null;
+}
+
 function resolveDemoRescheduleCalendar(
   normalizedText: string,
   locale: SupportedLocale,
@@ -1916,24 +2592,68 @@ function resolveDemoRescheduleCalendar(
   tomorrow: Date,
   dayAfterTomorrow: Date,
   friday: Date,
+  nextTuesday: Date,
+  nextWednesday: Date,
 ): DemoCalendarResult {
-  if (hasDayAfterTomorrow(normalizedText)) {
+  const targetKind = resolveRescheduleTargetKind(normalizedText);
+  const dateSource = getRescheduleDateSourceText(normalizedText);
+  const rescheduleDates = {
+    dayAfterTomorrow,
+    friday,
+    tomorrow,
+    nextTuesday,
+    nextWednesday,
+  };
+
+  if (targetKind === "next_week") {
+    const requestedText = hasFirstAvailabilitySignal(dateSource)
+      ? locale === "it"
+        ? "la prima disponibilità della prossima settimana"
+        : "the first availability next week"
+      : locale === "it"
+        ? "prossima settimana"
+        : "next week";
+
     return {
-      requestedDateTimeText: locale === "it" ? "dopodomani" : "day after tomorrow",
+      requestedDateTimeText: requestedText,
       requestedStartsAt: null,
       requestedEndsAt: null,
       needsCalendarCheck: true,
       conflictDetected: false,
-      alternatives: getDemoRescheduleAlternativesForRequestedDate("day_after_tomorrow", {
-        dayAfterTomorrow,
-        friday,
-        tomorrow,
-      }),
+      alternatives: getDemoRescheduleAlternativesForRequestedDate("next_week", rescheduleDates),
+      scenario: "reschedule_next_week",
+    };
+  }
+
+  if (targetKind === "day_after_tomorrow") {
+    const alternatives = getDemoRescheduleAlternativesForRequestedDate("day_after_tomorrow", rescheduleDates);
+    const sameTime = requestsSameAppointmentTime(normalizedText);
+    const currentTime = sameTime
+      ? extractClockTimeFromStartsAtText(resolveDemoRescheduleStartsAtText(normalizedText, locale), locale)
+      : null;
+    let requestedDateTimeText = locale === "it" ? "dopodomani" : "day after tomorrow";
+    let conflictDetected = false;
+
+    if (sameTime && currentTime) {
+      requestedDateTimeText =
+        locale === "it"
+          ? `dopodomani alle ${currentTime.formatted}`
+          : `day after tomorrow at ${currentTime.formatted}`;
+      conflictDetected = !isPreferredSlotAvailable(alternatives, currentTime.hour, currentTime.minute);
+    }
+
+    return {
+      requestedDateTimeText,
+      requestedStartsAt: null,
+      requestedEndsAt: null,
+      needsCalendarCheck: true,
+      conflictDetected,
+      alternatives,
       scenario: "reschedule_day_after_tomorrow",
     };
   }
 
-  if (hasThursday(normalizedText) && hasThreePm(normalizedText)) {
+  if (targetKind === "thursday") {
     const requestedStart = appointmentDate({
       title: "",
       customerName: "",
@@ -1950,16 +2670,12 @@ function resolveDemoRescheduleCalendar(
       requestedEndsAt: addMinutes(requestedStart, 30).toISOString(),
       needsCalendarCheck: true,
       conflictDetected: false,
-      alternatives: getDemoRescheduleAlternativesForRequestedDate("thursday", {
-        dayAfterTomorrow,
-        friday,
-        tomorrow,
-      }),
+      alternatives: getDemoRescheduleAlternativesForRequestedDate("thursday", rescheduleDates),
       scenario: "thursday_15",
     };
   }
 
-  if (hasTomorrow(normalizedText)) {
+  if (targetKind === "tomorrow") {
     const requestedStart = atLocal(dateKey(tomorrow), 15, 0);
 
     return {
@@ -1968,11 +2684,7 @@ function resolveDemoRescheduleCalendar(
       requestedEndsAt: addMinutes(requestedStart, 30).toISOString(),
       needsCalendarCheck: true,
       conflictDetected: false,
-      alternatives: getDemoRescheduleAlternativesForRequestedDate("tomorrow", {
-        dayAfterTomorrow,
-        friday,
-        tomorrow,
-      }),
+      alternatives: getDemoRescheduleAlternativesForRequestedDate("tomorrow", rescheduleDates),
       scenario: "reschedule_tomorrow",
     };
   }
@@ -1985,11 +2697,7 @@ function resolveDemoRescheduleCalendar(
     requestedEndsAt: addMinutes(requestedStart, 30).toISOString(),
     needsCalendarCheck: true,
     conflictDetected: false,
-    alternatives: getDemoRescheduleAlternativesForRequestedDate("unknown", {
-      dayAfterTomorrow,
-      friday,
-      tomorrow,
-    }),
+    alternatives: getDemoRescheduleAlternativesForRequestedDate("unknown", rescheduleDates),
     scenario: "reschedule_generic",
   };
 }
@@ -2000,21 +2708,36 @@ function getDemoRescheduleAlternativesForRequestedDate(
     tomorrow: Date;
     dayAfterTomorrow: Date;
     friday: Date;
+    nextTuesday: Date;
+    nextWednesday: Date;
   },
 ) {
+  if (dateKind === "next_week") {
+    return [
+      ...demoAlternativesForDay(dates.nextTuesday, { maxSlots: 1, preferMorning: true }),
+      ...demoAlternativesForDay(dates.nextWednesday, { maxSlots: 1, preferMorning: true }),
+    ].slice(0, 2);
+  }
+
   if (dateKind === "day_after_tomorrow") {
-    return [toSlot(dates.dayAfterTomorrow, 9, 30), toSlot(dates.dayAfterTomorrow, 11, 0)];
+    return demoAlternativesForDay(dates.dayAfterTomorrow, { preferMorning: true });
   }
 
   if (dateKind === "tomorrow") {
-    return [toSlot(dates.tomorrow, 16, 30), toSlot(dates.dayAfterTomorrow, 9, 30)];
+    return [
+      ...demoAlternativesForDay(dates.tomorrow, { maxSlots: 1, preferAfternoon: true }),
+      ...demoAlternativesForDay(dates.dayAfterTomorrow, { maxSlots: 1, preferMorning: true }),
+    ].slice(0, 2);
   }
 
   if (dateKind === "thursday") {
-    return [toSlot(dates.friday, 9, 30), toSlot(dates.friday, 11, 0)];
+    return demoAlternativesForDay(dates.friday, { preferMorning: true });
   }
 
-  return [toSlot(dates.tomorrow, 16, 30), toSlot(dates.friday, 11, 0)];
+  return [
+    ...demoAlternativesForDay(dates.tomorrow, { maxSlots: 1, preferAfternoon: true }),
+    ...demoAlternativesForDay(dates.friday, { maxSlots: 1, preferMorning: true }),
+  ].slice(0, 2);
 }
 
 function emptyCalendar(requestedDateTimeText: string | null): DemoCalendarResult {
@@ -2042,7 +2765,15 @@ function resolveRequestedNewDateText(
   const requestedDate = extractDemoRequestedDateText(text, locale);
 
   if (calendar.scenario === "reschedule_day_after_tomorrow") {
+    if (calendar.requestedDateTimeText?.includes(locale === "it" ? "alle" : "at")) {
+      return calendar.requestedDateTimeText;
+    }
+
     return requestedDate.text ?? (locale === "it" ? "dopodomani" : "day after tomorrow");
+  }
+
+  if (calendar.scenario === "reschedule_next_week") {
+    return calendar.requestedDateTimeText;
   }
 
   if (requestedDate.text && isExplicitRescheduleTargetDate(text, requestedDate.kind)) {
@@ -2057,46 +2788,53 @@ function extractDemoRequestedDateText(
   locale: SupportedLocale,
 ): { kind: DemoRequestedDateKind; text: string | null } {
   const normalized = normalizeText(customerText);
+  const dateSource = getRescheduleDateSourceText(normalized);
 
-  if (hasDayAfterTomorrow(normalized)) {
+  if (hasNextWeek(dateSource) || (hasFirstAvailabilitySignal(dateSource) && hasNextWeek(normalized))) {
+    return {
+      kind: "next_week",
+      text: hasFirstAvailabilitySignal(dateSource)
+        ? locale === "it"
+          ? "la prima disponibilità della prossima settimana"
+          : "the first availability next week"
+        : locale === "it"
+          ? "prossima settimana"
+          : "next week",
+    };
+  }
+
+  if (hasDayAfterTomorrow(dateSource)) {
     return {
       kind: "day_after_tomorrow",
       text: locale === "it" ? "dopodomani" : "day after tomorrow",
     };
   }
 
-  if (hasTomorrow(normalized)) {
+  if (hasTomorrow(dateSource)) {
     return {
       kind: "tomorrow",
       text: locale === "it" ? "domani" : "tomorrow",
     };
   }
 
-  if (hasToday(normalized)) {
+  if (hasToday(dateSource)) {
     return {
       kind: "today",
       text: locale === "it" ? "oggi" : "today",
     };
   }
 
-  if (hasFriday(normalized)) {
+  if (hasFriday(dateSource)) {
     return {
       kind: "friday",
       text: locale === "it" ? "venerdì" : "Friday",
     };
   }
 
-  if (hasThursday(normalized)) {
+  if (hasThursday(dateSource)) {
     return {
       kind: "thursday",
       text: locale === "it" ? "giovedì" : "Thursday",
-    };
-  }
-
-  if (hasNextWeek(normalized)) {
-    return {
-      kind: "next_week",
-      text: locale === "it" ? "prossima settimana" : "next week",
     };
   }
 
@@ -2123,9 +2861,17 @@ function isExplicitRescheduleTargetDate(text: string, kind: DemoRequestedDateKin
     today: "(?:oggi|today)",
     friday: "(?:venerdi|friday)",
     thursday: "(?:giovedi|thursday)",
-    next_week: "(?:prossima\\s+settimana|next\\s+week)",
+    next_week: "(?:prossima\\s+settimana|settimana\\s+prossima|next\\s+week|della\\s+settimana\\s+prossima)",
   };
   const phrase = phraseByKind[kind];
+
+  if (kind === "next_week") {
+    return (
+      new RegExp(`\\b(?:a|al|alla|per|verso|to|for|on|della)\\s+(?:il\\s+|la\\s+|la\\s+prima\\s+disponibilita\\s+della\\s+|the\\s+)?${phrase}\\b`).test(
+        normalized,
+      ) || hasNextWeek(getRescheduleDateSourceText(normalized))
+    );
+  }
 
   return new RegExp(`\\b(?:a|al|alla|per|verso|to|for|on)\\s+(?:il\\s+|la\\s+|the\\s+)?${phrase}\\b`).test(normalized);
 }
@@ -2317,7 +3063,7 @@ function toMatchedAppointment(
 }
 
 function resolveAppointmentContextType(intent: DemoDetectedIntent): AppointmentContextType {
-  if (intent === "new_appointment") {
+  if (intent === "new_appointment" || intent === "appointment_confirmation") {
     return "new_appointment";
   }
 
@@ -2367,6 +3113,13 @@ function resolveClarification(input: {
   }
 
   if (input.intent === "new_appointment" && !input.calendar.requestedDateTimeText) {
+    if (input.calendar.alternatives.length > 0) {
+      return {
+        key: null,
+        question: null,
+      };
+    }
+
     return {
       key: "appointmentTimeMissing",
       question: input.locale === "it"
@@ -2439,7 +3192,9 @@ function buildMissingFields(input: {
   }
 
   if (input.intent === "new_appointment" && !input.calendar.requestedDateTimeText) {
-    fields.push(input.locale === "it" ? "giorno o fascia oraria" : "day or time window");
+    if (input.calendar.alternatives.length === 0) {
+      fields.push(input.locale === "it" ? "giorno o fascia oraria" : "day or time window");
+    }
   }
 
   return fields;
@@ -2653,6 +3408,93 @@ function buildUrgentAppointmentSummary(input: {
     : `${customer} chiede ${reasonText}.`;
 }
 
+function buildRescheduleAppointmentReply(input: {
+  locale: SupportedLocale;
+  customerText: string;
+  calendar: DemoCalendarResult;
+  matchedAppointment: MatchedAppointment;
+  sender: SenderIdentity;
+}) {
+  const firstName = getReplyFirstName(input.sender);
+  const greeting =
+    input.locale === "it"
+      ? firstName
+        ? `Certo ${firstName}`
+        : "Certo"
+      : firstName
+        ? `Of course, ${firstName}`
+        : "Of course";
+  const alternatives = formatAlternativeTimes(input.calendar, input.locale);
+  const clockAlternatives = formatAlternativeClockTimes(input.calendar, input.locale);
+  const targetDate = formatRescheduleTargetDateLabel(input.calendar.scenario, input.locale);
+  const preferredSlot = resolvePreferredRescheduleSlot({
+    customerText: input.customerText,
+    matchedAppointment: input.matchedAppointment,
+    calendar: input.calendar,
+    locale: input.locale,
+  });
+
+  if (
+    preferredSlot &&
+    !isPreferredSlotAvailable(input.calendar.alternatives, preferredSlot.hour, preferredSlot.minute)
+  ) {
+    if (input.locale === "it") {
+      return `${greeting}, possiamo spostare l'appuntamento a ${targetDate}. Purtroppo ${preferredSlot.slotText} non è disponibile: posso proporti ${clockAlternatives}. Quale orario preferisci?`;
+    }
+
+    return `${greeting}, we can move the appointment to ${targetDate}. Unfortunately, ${preferredSlot.slotText} isn't available — I can offer ${clockAlternatives}. Which time works best for you?`;
+  }
+
+  if (
+    preferredSlot &&
+    isPreferredSlotAvailable(input.calendar.alternatives, preferredSlot.hour, preferredSlot.minute)
+  ) {
+    if (input.locale === "it") {
+      return `${greeting}, possiamo spostare l'appuntamento a ${preferredSlot.slotText}. Confermi?`;
+    }
+
+    return `${greeting}, we can move the appointment to ${preferredSlot.slotText}. Shall I confirm it?`;
+  }
+
+  if (input.calendar.scenario === "reschedule_day_after_tomorrow") {
+    if (input.locale === "it") {
+      return `${greeting}, possiamo spostare l'appuntamento a dopodomani. Ho disponibilità ${clockAlternatives}. Quale orario preferisci?`;
+    }
+
+    return `${greeting}, we can move the appointment to the day after tomorrow. I have availability at ${clockAlternatives}. Which time works best for you?`;
+  }
+
+  if (input.calendar.scenario === "thursday_15") {
+    if (input.locale === "it") {
+      return `Certo, possiamo spostare l'appuntamento di giovedì alle 15. Ti propongo ${alternatives}. Quale preferisci?`;
+    }
+
+    return `Of course, we can move Thursday's 3 PM appointment. I can offer ${alternatives}. Which one works best for you?`;
+  }
+
+  if (input.calendar.scenario === "reschedule_tomorrow") {
+    if (input.locale === "it") {
+      return `${greeting}, possiamo posticipare l'incontro di domani. Ti propongo ${alternatives}. Quale orario preferisci?`;
+    }
+
+    return `${greeting}, we can reschedule tomorrow's appointment. I can offer ${alternatives}. Which one works best for you?`;
+  }
+
+  if (input.calendar.scenario === "reschedule_next_week") {
+    if (input.locale === "it") {
+      return `${greeting}, possiamo spostare l'appuntamento di domani alla prossima settimana. Ti propongo ${alternatives}. Quale orario preferisci?`;
+    }
+
+    return `${greeting}, we can move tomorrow's appointment to next week. I can offer ${alternatives}. Which one works best for you?`;
+  }
+
+  if (input.locale === "it") {
+    return `Certo, possiamo rimandare l'appuntamento. Ti propongo ${alternatives}. Quale preferisci?`;
+  }
+
+  return `Of course, we can move the appointment. I can offer ${alternatives}. Which one works best for you?`;
+}
+
 function buildSuggestedReply(input: {
   locale: SupportedLocale;
   intent: DemoDetectedIntent;
@@ -2664,6 +3506,7 @@ function buildSuggestedReply(input: {
   clarificationQuestion: string | null;
   recommendedNextStep: RecommendedNextStep;
   urgency: Urgency;
+  customerText: string;
 }) {
   if (input.clarificationQuestion) {
     return input.clarificationQuestion;
@@ -2690,33 +3533,38 @@ function buildSuggestedReply(input: {
     }
 
     if (input.intent === "reschedule_appointment") {
-      if (input.calendar.scenario === "reschedule_day_after_tomorrow") {
-        const times = formatAlternativeClockTimes(input.calendar, input.locale);
-        return `Of course, we can move the appointment to the day after tomorrow. I have availability at ${times}. Which time works best for you?`;
-      }
-
-      if (input.calendar.scenario === "thursday_15") {
-        return `Of course, we can move Thursday’s 3 PM appointment. I can offer ${alternatives}. Which one works best for you?`;
-      }
-
-      if (input.calendar.scenario === "reschedule_tomorrow") {
-        return `Of course, we can reschedule tomorrow’s appointment. I can offer ${alternatives}. Which one works best for you?`;
-      }
-
-      return `Of course, we can move the appointment. I can offer ${alternatives}. Which one works best for you?`;
+      return buildRescheduleAppointmentReply({
+        locale: input.locale,
+        customerText: input.customerText,
+        calendar: input.calendar,
+        matchedAppointment: input.matchedAppointment,
+        sender: input.sender,
+      });
     }
 
     if (input.intent === "new_appointment") {
       if (input.urgency === "urgent" && input.reason) {
+        const firstName = getReplyFirstName(input.sender);
+        const greeting = formatDemoStudioGreeting(
+          detectDemoCustomerGreeting(input.customerText),
+          firstName,
+          input.locale,
+        );
         const reasonText = formatReasonForReply(input.reason, input.locale);
-        return `Hi, of course. For ${reasonText}, I can offer the first available slot today at 4:30 PM or tomorrow at 9:30 AM. Which one works best for you?`;
+        return `${greeting} For ${reasonText}, I can offer the first available slot today at 4:30 PM or tomorrow at 9:30 AM. Which one works best for you?`;
       }
 
       const reasonText = input.reason ? formatThirdPartyReason(input.reason, input.locale) : "the appointment";
+      const firstName = getReplyFirstName(input.sender);
+      const greeting = formatDemoStudioGreeting(
+        detectDemoCustomerGreeting(input.customerText),
+        firstName,
+        input.locale,
+      );
       const slotText = usesClockOnlyAlternatives(input.calendar)
         ? `at ${formatAlternativeClockTimes(input.calendar, input.locale)}`
         : alternatives;
-      return `Sure, for ${reasonText} I have availability ${input.calendar.requestedDateTimeText ? `${input.calendar.requestedDateTimeText} ` : ""}${slotText}. Which one works better for you?`;
+      return `${greeting} for ${reasonText} I have availability ${input.calendar.requestedDateTimeText ? `${input.calendar.requestedDateTimeText} ` : ""}${slotText}. Which one works better for you?`;
     }
 
     return "Thanks, I have noted your request and will review it before preparing any action.";
@@ -2744,38 +3592,35 @@ function buildSuggestedReply(input: {
   }
 
   if (input.intent === "reschedule_appointment") {
-    if (input.calendar.scenario === "reschedule_day_after_tomorrow") {
-      const firstName = getReplyFirstName(input.sender);
-      const greeting = firstName ? `Certo ${firstName}` : "Certo";
-      const times = formatAlternativeClockTimes(input.calendar, input.locale);
-
-      return `${greeting}, possiamo spostare l'appuntamento a dopodomani. Ho disponibilità ${times}. Quale orario preferisci?`;
-    }
-
-    if (input.calendar.scenario === "thursday_15") {
-      return `Certo, possiamo spostare l'appuntamento di giovedì alle 15. Ti propongo ${alternatives}. Quale preferisci?`;
-    }
-
-    if (input.calendar.scenario === "reschedule_tomorrow") {
-      const firstName = getReplyFirstName(input.sender);
-      const greeting = firstName ? `Certo ${firstName}` : "Certo";
-      return `${greeting}, possiamo posticipare l’incontro di domani. Ti propongo ${alternatives}. Quale orario preferisci?`;
-    }
-
-    return `Certo, possiamo rimandare l'appuntamento. Ti propongo ${alternatives}. Quale preferisci?`;
+    return buildRescheduleAppointmentReply({
+      locale: input.locale,
+      customerText: input.customerText,
+      calendar: input.calendar,
+      matchedAppointment: input.matchedAppointment,
+      sender: input.sender,
+    });
   }
 
   if (input.intent === "new_appointment") {
     if (input.urgency === "urgent" && input.reason) {
       const firstName = getReplyFirstName(input.sender);
-      const greeting = firstName ? `Ciao ${firstName}, certo.` : "Certo.";
+      const greeting = formatDemoStudioGreeting(
+        detectDemoCustomerGreeting(input.customerText),
+        firstName,
+        input.locale,
+      );
       const reasonText = formatReasonForReply(input.reason, input.locale);
-      return `${greeting} Per ${reasonText} posso proporti il primo slot utile oggi alle 16:30 oppure domani alle 9:30. Quale orario preferisci?`;
+      const slotText = formatAlternativeTimes(input.calendar, input.locale);
+      return `${greeting} Per ${reasonText} posso proporle come prima disponibilità utile ${slotText}. Quale orario preferisce?`;
     }
 
     const reasonText = input.reason ? formatThirdPartyReason(input.reason, input.locale) : "l'appuntamento";
     const firstName = getReplyFirstName(input.sender);
-    const greeting = firstName ? `Certo ${firstName},` : "Certo,";
+    const greeting = formatDemoStudioGreeting(
+      detectDemoCustomerGreeting(input.customerText),
+      firstName,
+      input.locale,
+    );
     const slotText = usesClockOnlyAlternatives(input.calendar)
       ? formatAlternativeClockTimes(input.calendar, input.locale)
       : alternatives;
@@ -2815,6 +3660,7 @@ function calculateFallbackConfidence(
     delay_notice: matchedAppointment.found ? 0.94 : 0.9,
     cancel_appointment: 0.96,
     appointment_lookup: matchedAppointment.found ? 0.96 : 0.88,
+    appointment_confirmation: 0.96,
     callback_request: 0.86,
     manual_review: 0.42,
   };
@@ -2888,11 +3734,23 @@ function formatAlternativeTimes(calendar: DemoCalendarResult, locale: SupportedL
         return locale === "it" ? `dopodomani alle ${time}` : `day after tomorrow at ${time}`;
       }
 
+      if (calendar.scenario === "urgent_first_available") {
+        const time = formatSlotTime(slot.startsAt, locale);
+        return index === 0
+          ? locale === "it"
+            ? `oggi alle ${time}`
+            : `today at ${time}`
+          : locale === "it"
+            ? `domani alle ${time}`
+            : `tomorrow at ${time}`;
+      }
+
       if (
         calendar.scenario === "tomorrow" ||
         calendar.scenario === "tomorrow_morning" ||
         calendar.scenario === "tomorrow_afternoon" ||
-        calendar.scenario === "tomorrow_15"
+        calendar.scenario === "tomorrow_15" ||
+        calendar.scenario === "thursday"
       ) {
         return formatSlotTime(slot.startsAt, locale);
       }
@@ -2922,7 +3780,8 @@ function usesClockOnlyAlternatives(calendar: DemoCalendarResult) {
   return calendar.scenario === "tomorrow" ||
     calendar.scenario === "tomorrow_morning" ||
     calendar.scenario === "tomorrow_afternoon" ||
-    calendar.scenario === "tomorrow_15";
+    calendar.scenario === "tomorrow_15" ||
+    calendar.scenario === "thursday";
 }
 
 function formatAlternativeClockTimes(calendar: DemoCalendarResult, locale: SupportedLocale) {
@@ -2939,15 +3798,7 @@ function formatAlternativeClockTimes(calendar: DemoCalendarResult, locale: Suppo
 }
 
 function getReplyFirstName(sender: SenderIdentity) {
-  if (sender.contact?.firstName) {
-    return sender.contact.firstName;
-  }
-
-  if (!sender.customerIdentified || !sender.senderName) {
-    return null;
-  }
-
-  return sender.senderName.trim().split(/\s+/)[0] ?? null;
+  return resolveDemoPatientFirstName(sender.contact?.firstName, sender.contact?.name, sender.senderName);
 }
 
 function formatSlotTime(value: string, locale: SupportedLocale) {
@@ -2992,8 +3843,12 @@ function detectRequestedDateTimeText(text: string, locale: SupportedLocale) {
     return locale === "it" ? "prossima settimana" : "next week";
   }
 
-  if (hasThursday(normalized) && hasThreePm(normalized)) {
-    return locale === "it" ? "giovedì alle 15:00" : "Thursday at 3:00 PM";
+  if (hasThursday(normalized)) {
+    if (hasThreePm(normalized)) {
+      return locale === "it" ? "giovedì alle 15:00" : "Thursday at 3:00 PM";
+    }
+
+    return locale === "it" ? "giovedì" : "Thursday";
   }
 
   if (hasTomorrow(normalized) && hasThreePm(normalized)) {
@@ -3066,19 +3921,6 @@ function extractDelayMinutes(text: string) {
   return match ? Number(match[1]) : null;
 }
 
-function toSlot(day: Date, hour: number, minute: number): AvailabilitySlot {
-  const startsAt = atLocal(dateKey(day), hour, minute);
-  const endsAt = addMinutes(startsAt, 30);
-
-  return {
-    startsAt: startsAt.toISOString(),
-    endsAt: endsAt.toISOString(),
-    durationMinutes: 30,
-    provider: "all",
-    calendarAccountId: null,
-  };
-}
-
 function nextWeekStart(now: Date) {
   const currentDay = now.getDay();
   const daysUntilNextMonday = ((8 - currentDay) % 7) || 7;
@@ -3089,6 +3931,17 @@ function nextWeekday(now: Date, targetDay: number) {
   const currentDay = now.getDay();
   const daysUntilTarget = (targetDay - currentDay + 7) % 7 || 7;
   return addDays(now, daysUntilTarget);
+}
+
+function resolveNamedWeekday(now: Date, jsWeekday: number) {
+  const cursor = new Date(now);
+  cursor.setHours(12, 0, 0, 0);
+
+  if (cursor.getDay() === jsWeekday) {
+    return cursor;
+  }
+
+  return nextWeekday(now, jsWeekday);
 }
 
 function atLocal(day: string, hour: number, minute: number) {

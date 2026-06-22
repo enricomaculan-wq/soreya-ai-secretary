@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 
+import { SOREYA_ACCESS_TOKEN_COOKIE } from "@/lib/auth-cookies";
 import {
   DEMO_ACCESS_COOKIE,
   hasDemoAccess,
@@ -11,8 +12,29 @@ import {
   shouldBypassDemoAccessInDevelopment,
 } from "@/lib/demo-access";
 
+const SUPABASE_AUTH_PATHS = ["/dashboard", "/settings", "/onboarding"] as const;
+
+function requiresSupabaseSession(pathname: string) {
+  return SUPABASE_AUTH_PATHS.some(
+    (protectedPath) => pathname === protectedPath || pathname.startsWith(`${protectedPath}/`),
+  );
+}
+
+function redirectToLogin(request: NextRequest) {
+  const loginUrl = request.nextUrl.clone();
+  loginUrl.pathname = "/login";
+  loginUrl.search = "";
+  loginUrl.searchParams.set("reason", "session-expired");
+  loginUrl.searchParams.set("next", `${request.nextUrl.pathname}${request.nextUrl.search}`);
+  return NextResponse.redirect(loginUrl);
+}
+
 export function proxy(request: NextRequest) {
   const { pathname, search } = request.nextUrl;
+
+  if (requiresSupabaseSession(pathname) && !request.cookies.get(SOREYA_ACCESS_TOKEN_COOKIE)?.value) {
+    return redirectToLogin(request);
+  }
 
   if (!isProtectedDemoPath(pathname)) {
     return NextResponse.next();

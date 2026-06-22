@@ -111,7 +111,7 @@ export function SyncSchedulerPanel() {
   }
 
   return (
-    <div className="rounded-lg border border-stone-200 bg-white p-5 shadow-sm">
+    <div className="soreya-card p-5 shadow-sm">
       <div className="flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
         <div>
           <h3 className="text-base font-semibold tracking-normal text-stone-950">{t("sync.scheduler")}</h3>

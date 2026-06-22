@@ -1,23 +1,19 @@
-import type {
-  DailySummary,
-  EmergencyAction,
-  QuickCallNote,
-  SmartwatchNotificationPayload,
-  SuggestedAction,
+import {
+  SOREYA_DEEP_LINKS,
+  type DailySummary,
+  type EmergencyAction,
+  type QuickCallNote,
+  type SmartwatchNotificationPayload,
+  type SuggestedAction,
 } from "@soreya/shared";
 
 import { createSignedActionToken } from "@/lib/server/signed-action-token";
 
+export { SOREYA_DEEP_LINKS };
+
 export const SMARTWATCH_SAFETY_LABEL = "Draft only";
 export const SMARTWATCH_SAFETY_COPY =
   "Smartwatch approval is not execution. Soreya still requires final confirmation before sending messages or modifying calendars.";
-
-export const SOREYA_DEEP_LINKS = {
-  approvals: "soreya://approvals",
-  dailySummary: "soreya://daily-summary",
-  emergency: "soreya://emergency",
-  quickCall: "soreya://quick-call",
-} as const;
 
 type SignedWatchActionContext = {
   organizationId: string;

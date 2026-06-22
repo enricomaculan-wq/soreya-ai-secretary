@@ -1,5 +1,5 @@
 import { buildQuickCallPreview, quickCallJsonError, readQuickCallRawText } from "@/lib/server/quick-call-api";
-import { checkRateLimit, rateLimitResponse } from "@/lib/server/rate-limit";
+import { checkRateLimitAsync, rateLimitResponse } from "@/lib/server/rate-limit";
 import { getAuthenticatedServerContext } from "@/lib/server/supabase";
 import { z } from "zod";
 
@@ -9,7 +9,7 @@ const quickCallSchema = z.object({
 
 export async function POST(request: Request) {
   try {
-    const rateLimit = checkRateLimit(request, { route: "/api/quick-call/analyze", limit: 20 });
+    const rateLimit = await checkRateLimitAsync(request, { route: "/api/quick-call/analyze", limit: 20 });
 
     if (!rateLimit.allowed) {
       return rateLimitResponse(rateLimit);

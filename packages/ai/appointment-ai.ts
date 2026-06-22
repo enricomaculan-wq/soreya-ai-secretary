@@ -9,11 +9,13 @@ import type {
   NormalizedCalendarEvent,
   NormalizedEmailMessage,
   NormalizedWhatsAppMessage,
+  OrganizationBrainContext,
   QuickCallAnalysis,
   UserRule,
 } from "@soreya/shared";
 import { z } from "zod";
 
+import { buildBrainSystemPromptAddendum } from "./brain";
 import { callOpenAIJson, readOpenAIConfig } from "./openai-client";
 
 export const SOREYA_APPOINTMENT_SYSTEM_PROMPT = [
@@ -92,11 +94,21 @@ const AIReplyDraftSchema = z.object({
   safetyNotes: z.array(z.string()),
 });
 
+function resolveAppointmentSystemPrompt(input: AnalyzeAppointmentTextInput) {
+  const brainContext = readBrainContextFromJson(input.context);
+
+  if (!brainContext) {
+    return SOREYA_APPOINTMENT_SYSTEM_PROMPT;
+  }
+
+  return `${SOREYA_APPOINTMENT_SYSTEM_PROMPT}\n\n${buildBrainSystemPromptAddendum(brainContext)}`;
+}
+
 export async function analyzeAppointmentTextWithAI(
   input: AnalyzeAppointmentTextInput,
 ): Promise<AIAppointmentAnalysis> {
   const result = await callOpenAIJson({
-    systemPrompt: SOREYA_APPOINTMENT_SYSTEM_PROMPT,
+    systemPrompt: resolveAppointmentSystemPrompt(input),
     schema: AIAppointmentAnalysisSchema,
     userPrompt: JSON.stringify({
       task: "Analyze this operational appointment text for Soreya.",
@@ -198,7 +210,11 @@ export async function analyzeWhatsAppWithAI(
 
 export async function analyzeQuickCallWithAI(
   rawText: string,
-  context: { timezone?: string; fallbackAnalysis: QuickCallAnalysis },
+  context: {
+    timezone?: string;
+    fallbackAnalysis: QuickCallAnalysis;
+    brainContext?: OrganizationBrainContext;
+  },
 ): Promise<QuickCallAnalysis> {
   const fallback = quickCallToAIAppointment(context.fallbackAnalysis);
   const analysis = await analyzeAppointmentTextWithAI({
@@ -206,6 +222,14 @@ export async function analyzeQuickCallWithAI(
     text: rawText,
     timezone: context.timezone,
     fallbackAnalysis: fallback,
+    context: context.brainContext
+      ? ({
+          brain: {
+            settings: context.brainContext.settings,
+            services: context.brainContext.services,
+          },
+        } as Json)
+      : undefined,
   });
 
   return {
@@ -349,6 +373,34 @@ function quickCallToAIAppointment(analysis: QuickCallAnalysis): AIAppointmentAna
     aiProvider: analysis.aiProvider ?? "heuristic",
     aiModel: analysis.aiModel ?? readOpenAIConfig().model,
     usedFallback: analysis.usedFallback ?? true,
+  };
+}
+
+function readBrainContextFromJson(context: Json | undefined): OrganizationBrainContext | null {
+  if (!context || typeof context !== "object" || Array.isArray(context)) {
+    return null;
+  }
+
+  const brain = context.brain;
+
+  if (!brain || typeof brain !== "object" || Array.isArray(brain)) {
+    return null;
+  }
+
+  const settings = brain.settings;
+  const services = brain.services;
+
+  if (!settings || typeof settings !== "object" || Array.isArray(settings)) {
+    return null;
+  }
+
+  if (!Array.isArray(services)) {
+    return null;
+  }
+
+  return {
+    settings: settings as OrganizationBrainContext["settings"],
+    services: services as OrganizationBrainContext["services"],
   };
 }
 

@@ -3,17 +3,23 @@ import {
   analyzeDemoCustomerRequest,
   buildDemoApprovalFromRequest,
   type ApprovalState,
+  type Json,
+  type SuggestedAction,
   type DemoCustomerRequestAnalysis,
   type DemoDetectedIntent,
   type DemoPlaygroundChannel,
   type SupportedLocale,
 } from '@soreya/shared';
 import { Link, type Href } from 'expo-router';
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { Pressable, StyleSheet, Text, TextInput, View } from 'react-native';
 
+import { ClinicalIllustration, mobileTrustIllustrations } from '@/components/clinical-illustration';
 import { DataRow, Section, SoreyaScreen, StatusBadge } from '@/components/soreya-screen';
+import { getMobileDemoData } from '@/lib/demo-data';
+import { addDemoPlaygroundAction } from '@/lib/demo-state';
 import { useI18n } from '@/lib/i18n';
+import { readMobilePresentationMode } from '@/lib/presentation-mode';
 
 type DemoActionStatus = Extract<ApprovalState, 'approved' | 'edited' | 'ignored' | 'pending_approval'>;
 
@@ -32,7 +38,7 @@ type SecondaryLink = {
 };
 
 const channels: DemoPlaygroundChannel[] = ['email', 'whatsapp', 'quick_call'];
-const exampleKeys = ['quoteTomorrow', 'rescheduleThursday', 'late'] as const;
+const exampleKeys = ['hygieneVisitTomorrow', 'hygienePrice', 'rescheduleThursday'] as const;
 const recentStorageKey = 'soreya.mobile.demo.recent';
 const secondaryLinks: SecondaryLink[] = [
   {
@@ -61,10 +67,50 @@ export default function TodayScreen() {
   const [recentActions, setRecentActions] = useState<RecentDemoAction[]>([]);
   const [draftActionId, setDraftActionId] = useState<string | null>(null);
   const [message, setMessage] = useState<string | null>(null);
+  const [presentationMode, setPresentationMode] = useState(false);
+  const presentationBootstrapped = useRef(false);
   const examples = useMemo(
-    () => exampleKeys.map((key) => ({ key, text: t(`demoPlayground.examples.${key}`) })),
+    () => exampleKeys.map((key) => ({
+      key,
+      label: t(`demoPlayground.exampleShort.${key}`),
+      text: t(`demoPlayground.examples.${key}`),
+    })),
     [t],
   );
+
+  useEffect(() => {
+    let isMounted = true;
+
+    async function loadPresentationMode() {
+      const enabled = await readMobilePresentationMode();
+      if (!isMounted) {
+        return;
+      }
+
+      setPresentationMode(enabled);
+      if (enabled) {
+        setChannel('whatsapp');
+        const seededText = t('demoPlayground.examples.hygieneVisitTomorrow');
+        setCustomerText(seededText);
+      }
+    }
+
+    void loadPresentationMode();
+
+    return () => {
+      isMounted = false;
+    };
+  }, [t]);
+
+  useEffect(() => {
+    if (!presentationMode || presentationBootstrapped.current || !customerText.trim()) {
+      return;
+    }
+
+    presentationBootstrapped.current = true;
+    runAnalysis();
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- bootstrap presentation once
+  }, [presentationMode, customerText]);
 
   useEffect(() => {
     let isMounted = true;
@@ -103,12 +149,31 @@ export default function TodayScreen() {
       return;
     }
 
-    const action = buildDemoApprovalFromRequest({
+    const baseAction = buildDemoApprovalFromRequest({
       ...analysis,
       suggestedReply: editedReply,
     });
+    const now = new Date().toISOString();
+    const demo = getMobileDemoData(locale);
+    const payload = toJsonObject(baseAction.draft_payload);
+    const action: SuggestedAction = {
+      ...baseAction,
+      id: draftActionId ?? baseAction.id,
+      status,
+      draft_payload: {
+        ...payload,
+        body: editedReply,
+        editedInDemo: editedReply !== analysis.suggestedReply,
+      } as Json,
+      approved_by: status === 'approved' ? demo.membership.user_id : null,
+      approved_at: status === 'approved' ? now : null,
+      updated_at: now,
+    };
+
+    addDemoPlaygroundAction(locale, action);
+
     const recentAction: RecentDemoAction = {
-      id: draftActionId ?? action.id,
+      id: action.id,
       status,
       title: action.title,
       body: editedReply,
@@ -140,7 +205,14 @@ export default function TodayScreen() {
   }
 
   return (
-    <SoreyaScreen eyebrow={t('common.appName')} title={t('demoApp.hero.title')}>
+    <SoreyaScreen
+      eyebrow={presentationMode ? t('demo.badge') : t('landing.hero.eyebrow')}
+      title={presentationMode ? t('demoApp.hero.title') : t('demoApp.hero.title')}>
+      <View style={styles.trustRow}>
+        {mobileTrustIllustrations.map((variant) => (
+          <ClinicalIllustration key={variant} variant={variant} />
+        ))}
+      </View>
       <Section title={t('demoPlayground.customerRequest')}>
         <TextInput
           value={customerText}
@@ -170,9 +242,17 @@ export default function TodayScreen() {
           ))}
         </View>
         <View style={styles.examples}>
+          <Text style={styles.examplesLabel}>{t('demoPlayground.examplesLabel')}</Text>
           {examples.map((example) => (
-            <Pressable key={example.key} onPress={() => setCustomerText(example.text)} style={styles.exampleButton}>
-              <Text style={styles.exampleText}>{example.text}</Text>
+            <Pressable
+              key={example.key}
+              onPress={() => {
+                setCustomerText(example.text);
+                setChannel('whatsapp');
+                setMessage(null);
+              }}
+              style={styles.exampleButton}>
+              <Text style={styles.exampleText}>{example.label}</Text>
             </Pressable>
           ))}
         </View>
@@ -289,6 +369,10 @@ function parseRecentActions(value: string): RecentDemoAction[] {
   }
 }
 
+function toJsonObject(value: Json): Record<string, Json | undefined> {
+  return value && typeof value === 'object' && !Array.isArray(value) ? value : {};
+}
+
 function buildUnderstandingSummary(
   analysis: DemoCustomerRequestAnalysis,
   translate: (key: string, params?: Record<string, string | number | boolean | null | undefined>) => string,
@@ -300,11 +384,17 @@ function buildUnderstandingSummary(
     delay_notice: 'demoPlayground.summary.delay',
     cancel_appointment: 'demoPlayground.summary.cancellation',
     appointment_lookup: 'demoPlayground.summary.appointmentLookup',
+    appointment_confirmation: 'demoPlayground.summary.appointmentConfirmation',
     callback_request: 'demoPlayground.summary.callback',
     manual_review: 'demoPlayground.summary.manualReview',
   };
 
-  return translate(summaryKeyByIntent[analysis.detectedIntent], { requestedTime });
+  const params =
+    analysis.detectedIntent === 'appointment_confirmation'
+      ? { confirmedTime: requestedTime }
+      : { requestedTime };
+
+  return translate(summaryKeyByIntent[analysis.detectedIntent], params);
 }
 
 function buildCalendarSummary(
@@ -342,12 +432,19 @@ function formatTime(value: string, locale: SupportedLocale) {
 }
 
 const styles = StyleSheet.create({
+  trustRow: {
+    flexDirection: 'row',
+    gap: 10,
+    justifyContent: 'center',
+    marginBottom: 4,
+    marginTop: -6,
+  },
   requestInput: {
     backgroundColor: '#ffffff',
-    borderColor: '#d6d3d1',
+    borderColor: '#e8e8e8',
     borderRadius: 8,
     borderWidth: 1,
-    color: '#1c1917',
+    color: '#171717',
     fontSize: 16,
     lineHeight: 23,
     minHeight: 150,
@@ -355,7 +452,7 @@ const styles = StyleSheet.create({
   },
   primaryButton: {
     alignItems: 'center',
-    backgroundColor: '#1c1917',
+    backgroundColor: '#171717',
     borderRadius: 8,
     justifyContent: 'center',
     marginTop: 12,
@@ -374,7 +471,7 @@ const styles = StyleSheet.create({
   channelButton: {
     alignItems: 'center',
     backgroundColor: '#ffffff',
-    borderColor: '#d6d3d1',
+    borderColor: '#e8e8e8',
     borderRadius: 8,
     borderWidth: 1,
     flex: 1,
@@ -382,11 +479,11 @@ const styles = StyleSheet.create({
     minHeight: 42,
   },
   channelButtonActive: {
-    backgroundColor: '#1c1917',
-    borderColor: '#1c1917',
+    backgroundColor: '#171717',
+    borderColor: '#171717',
   },
   channelButtonText: {
-    color: '#57534e',
+    color: '#525252',
     fontSize: 12,
     fontWeight: '800',
   },
@@ -397,31 +494,38 @@ const styles = StyleSheet.create({
     gap: 8,
     marginTop: 14,
   },
+  examplesLabel: {
+    color: '#78716c',
+    fontSize: 11,
+    fontWeight: '700',
+    letterSpacing: 0.6,
+    textTransform: 'uppercase',
+  },
   exampleButton: {
     backgroundColor: '#f5f5f4',
-    borderColor: '#e7e5e4',
+    borderColor: '#e8e8e8',
     borderRadius: 8,
     borderWidth: 1,
     padding: 12,
   },
   exampleText: {
-    color: '#57534e',
+    color: '#525252',
     fontSize: 13,
     fontWeight: '700',
     lineHeight: 18,
   },
   replyLabel: {
-    color: '#1c1917',
+    color: '#171717',
     fontSize: 14,
     fontWeight: '800',
     marginTop: 12,
   },
   replyInput: {
     backgroundColor: '#ffffff',
-    borderColor: '#d6d3d1',
+    borderColor: '#e8e8e8',
     borderRadius: 8,
     borderWidth: 1,
-    color: '#1c1917',
+    color: '#171717',
     fontSize: 14,
     lineHeight: 20,
     marginTop: 8,
@@ -444,18 +548,18 @@ const styles = StyleSheet.create({
   },
   lightButton: {
     backgroundColor: '#ffffff',
-    borderColor: '#d6d3d1',
+    borderColor: '#e8e8e8',
   },
   darkButton: {
-    backgroundColor: '#1c1917',
-    borderColor: '#1c1917',
+    backgroundColor: '#171717',
+    borderColor: '#171717',
   },
   actionButtonText: {
     fontSize: 13,
     fontWeight: '800',
   },
   lightButtonText: {
-    color: '#57534e',
+    color: '#525252',
   },
   darkButtonText: {
     color: '#ffffff',
@@ -465,18 +569,18 @@ const styles = StyleSheet.create({
   },
   secondaryTile: {
     backgroundColor: '#ffffff',
-    borderColor: '#d6d3d1',
+    borderColor: '#e8e8e8',
     borderRadius: 8,
     borderWidth: 1,
     padding: 14,
   },
   secondaryTitle: {
-    color: '#1c1917',
+    color: '#171717',
     fontSize: 15,
     fontWeight: '800',
   },
   secondaryDetail: {
-    color: '#78716c',
+    color: '#737373',
     fontSize: 13,
     lineHeight: 18,
     marginTop: 5,

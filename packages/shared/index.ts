@@ -1,14 +1,17 @@
-export type Json =
-  | string
-  | number
-  | boolean
-  | null
-  | { [key: string]: Json | undefined }
-  | Json[];
+import type { Json } from "./json";
 
+export type { Json } from "./json";
+
+export * from "./brain";
+export * from "./deep-links";
 export * from "./demo-data";
+export * from "./demo-calendar-schedule";
 export * from "./demo-playground";
 export * from "./i18n";
+export * from "./website-form";
+export * from "./website-chat";
+export * from "./telegram";
+export * from "./settings-channels";
 
 export type DateTime = string;
 export type Time = string;
@@ -21,16 +24,20 @@ export type AccountProvider =
   | "microsoft_calendar"
   | "microsoft_mail"
   | "whatsapp_business"
-  | "whatsapp_business_cloud";
+  | "whatsapp_business_cloud"
+  | "website_form"
+  | "website_chat"
+  | "telegram";
 export type CalendarProvider = "google" | "microsoft";
 export type EmailProvider = "gmail" | "microsoft";
 export type WhatsAppProvider = "whatsapp_business_cloud";
+export type TelegramProvider = "telegram_bot";
 export type ConnectedAccountStatus = "active" | "reauth_required" | "disabled" | "error";
-export type CommunicationChannelType = "email" | "whatsapp" | "calendar";
+export type CommunicationChannelType = "email" | "whatsapp" | "calendar" | "website_form" | "website_chat" | "telegram";
 export type CommunicationChannelStatus = "active" | "paused" | "disconnected";
-export type AIAnalysisSource = "email" | "whatsapp" | "quick_call" | "emergency";
+export type AIAnalysisSource = "email" | "whatsapp" | "telegram" | "quick_call" | "emergency";
 export type AIProvider = "openai" | "heuristic";
-export type AIReplyChannel = "email" | "whatsapp" | "calendar" | "manual_review";
+export type AIReplyChannel = "email" | "whatsapp" | "telegram" | "calendar" | "manual_review";
 export type NotificationTokenStatus = "active" | "disabled" | "revoked";
 export type DeviceType = "web" | "mobile" | "smartwatch";
 export type SmartwatchPlatform = "apple_watch" | "wear_os" | "unknown";
@@ -69,6 +76,7 @@ export type ExecutionStatus =
 export type ExecutionType =
   | "email_reply"
   | "whatsapp_reply"
+  | "telegram_reply"
   | "calendar_create"
   | "calendar_update"
   | "calendar_cancel"
@@ -76,12 +84,13 @@ export type ExecutionType =
   | "emergency_whatsapp"
   | "calendar_block"
   | "callback_reminder";
-export type SyncProvider = "google_calendar" | "microsoft_calendar" | "gmail" | "microsoft_mail" | "whatsapp";
+export type SyncProvider = "google_calendar" | "microsoft_calendar" | "gmail" | "microsoft_mail" | "whatsapp" | "telegram";
 export type SyncStatus = "queued" | "running" | "success" | "partial_success" | "failed" | "skipped";
 export type SyncJobType =
   | "calendar_sync"
   | "email_sync"
   | "whatsapp_webhook"
+  | "telegram_webhook"
   | "daily_summary_generate"
   | "full_sync";
 export type MessageDirection = "incoming" | "outgoing";
@@ -107,6 +116,8 @@ export type SuggestedActionType =
   | "ask_email_more_info"
   | "send_whatsapp_reply"
   | "ask_whatsapp_more_info"
+  | "send_telegram_reply"
+  | "ask_telegram_more_info"
   | "send_emergency_email"
   | "send_emergency_whatsapp"
   | "propose_calendar_reschedule"
@@ -203,6 +214,7 @@ export type UserRuleScope =
   | "all_channels"
   | "email"
   | "whatsapp"
+  | "telegram"
   | "calendar"
   | "contact"
   | "organization";
@@ -219,6 +231,8 @@ export const externalActionTypes = [
   "ask_email_more_info",
   "send_whatsapp_reply",
   "ask_whatsapp_more_info",
+  "send_telegram_reply",
+  "ask_telegram_more_info",
   "send_emergency_email",
   "send_emergency_whatsapp",
   "propose_calendar_reschedule",
@@ -380,6 +394,46 @@ export type ConnectedEmailAccount = {
   updatedAt: DateTime;
 };
 
+export type NormalizedWebsiteChatSession = {
+  id: Uuid;
+  organizationId: Uuid;
+  sessionToken: string;
+  visitorName: string | null;
+  visitorEmail: string | null;
+  pageUrl: string | null;
+  status: "open" | "closed";
+  createdAt: DateTime;
+  updatedAt: DateTime;
+};
+
+export type NormalizedWebsiteChatMessage = {
+  id: Uuid;
+  organizationId: Uuid;
+  sessionId: Uuid;
+  providerMessageId: string | null;
+  direction: "incoming" | "outgoing";
+  bodyText: string | null;
+  authorName: string | null;
+  createdAt: DateTime;
+};
+
+export type NormalizedWebsiteFormMessage = {
+  id: Uuid;
+  organizationId: Uuid;
+  providerMessageId: string;
+  fromName: string | null;
+  fromEmail: string | null;
+  fromPhone: string | null;
+  subject: string | null;
+  bodyText: string | null;
+  receivedAt: DateTime;
+  pageUrl: string | null;
+  formName: string | null;
+  raw: Json;
+  createdAt: DateTime;
+  updatedAt: DateTime;
+};
+
 export type NormalizedEmailMessage = {
   id: Uuid;
   organizationId: Uuid;
@@ -509,6 +563,78 @@ export type WhatsAppConnectionStatus = {
 };
 
 export type WhatsAppReplyActionType = "send_whatsapp_reply" | "ask_whatsapp_more_info";
+
+export type ConnectedTelegramAccount = {
+  id: Uuid;
+  organizationId: Uuid;
+  provider: TelegramProvider;
+  botUserId: string;
+  botUsername: string | null;
+  displayName: string | null;
+  accessTokenEncrypted: string | null;
+  webhookSecret: string | null;
+  enabled: boolean;
+  status: ConnectedAccountStatus;
+  lastSyncedAt: DateTime | null;
+  lastSyncStatus: SyncStatus | null;
+  lastSyncError: string | null;
+  lastTokenRefreshAt: DateTime | null;
+  createdAt: DateTime;
+  updatedAt: DateTime;
+};
+
+export type NormalizedTelegramMessage = {
+  id: Uuid;
+  organizationId: Uuid;
+  provider: TelegramProvider;
+  providerMessageId: string;
+  providerThreadId: string | null;
+  telegramAccountId: Uuid;
+  fromChatId: string | null;
+  fromName: string | null;
+  fromUsername: string | null;
+  messageType: string;
+  textBody: string | null;
+  receivedAt: DateTime;
+  raw: Json;
+  createdAt: DateTime;
+  updatedAt: DateTime;
+};
+
+export type TelegramAppointmentIntent = {
+  isAppointmentRequest: boolean;
+  intentType?: string;
+  confidence: number;
+  requestedDateTimeText: string | null;
+  requestedStartsAt: DateTime | null;
+  requestedEndsAt: DateTime | null;
+  timezone: string | null;
+  customerName: string | null;
+  customerPhone: string | null;
+  reason: string | null;
+  needsMoreInfo: boolean;
+  missingFields?: string[];
+  extractedConstraints: Json;
+  priority?: "low" | "normal" | "high";
+  suggestedReplyTone?: "professional" | "friendly" | "short" | "apologetic";
+  suggestedReplyBody?: string | null;
+  safetyNotes?: string[];
+  aiProvider?: AIProvider;
+  aiModel?: string | null;
+  usedFallback?: boolean;
+};
+
+export type TelegramConnectionStatus = {
+  provider: TelegramProvider;
+  connected: boolean;
+  botUsername: string | null;
+  status: ConnectedAccountStatus | "not_connected";
+  lastSyncedAt: DateTime | null;
+  lastSyncStatus: SyncStatus | null;
+  lastSyncError: string | null;
+};
+
+export type TelegramReplyActionType = "send_telegram_reply" | "ask_telegram_more_info";
 
 export type ApprovalLog = {
   id: Uuid;
@@ -822,6 +948,11 @@ export type IncomingMessageRow = {
   whatsapp_provider: WhatsAppProvider | null;
   whatsapp_phone: string | null;
   whatsapp_message_type: string | null;
+  telegram_provider: TelegramProvider | null;
+  telegram_chat_id: string | null;
+  telegram_message_id: string | null;
+  telegram_message_type: string | null;
+  source_channel: CommunicationChannelType | null;
   from_email: string | null;
   from_name: string | null;
   to_emails: string[];
@@ -842,14 +973,54 @@ export type IncomingMessageRow = {
   updated_at: DateTime;
 };
 
+export type WebsiteChatSessionRow = {
+  id: Uuid;
+  organization_id: Uuid;
+  session_token: string;
+  visitor_name: string | null;
+  visitor_email: string | null;
+  page_url: string | null;
+  status: "open" | "closed";
+  created_at: DateTime;
+  updated_at: DateTime;
+};
+
+export type WebsiteChatMessageRow = {
+  id: Uuid;
+  organization_id: Uuid;
+  session_id: Uuid;
+  direction: MessageDirection;
+  body_text: string;
+  author_name: string | null;
+  provider_message_id: string | null;
+  created_at: DateTime;
+};
+
+export type OrganizationServiceRow = {
+  id: Uuid;
+  organization_id: Uuid;
+  slug: string;
+  name: string;
+  duration_minutes: number;
+  price_cents: number | null;
+  currency: string;
+  is_active: boolean;
+  aliases: string[];
+  description: string | null;
+  sort_order: number;
+  created_at: DateTime;
+  updated_at: DateTime;
+};
+
 export type AppointmentRequestRow = {
   id: Uuid;
   organization_id: Uuid;
+  service_id: Uuid | null;
   incoming_message_id: Uuid | null;
   call_note_id: Uuid | null;
   contact_id: Uuid | null;
   source_channel: CommunicationChannelType | null;
-  source_type: "email" | "whatsapp" | "calendar" | "quick_call" | "manual" | null;
+  source_type: "email" | "whatsapp" | "telegram" | "calendar" | "quick_call" | "manual" | null;
   status: AppointmentRequestStatus;
   title: string | null;
   requested_start: DateTime | null;
@@ -1238,6 +1409,11 @@ export type Database = {
         InsertShape<OrganizationMemberRow, "organization_id" | "user_id">,
         UpdateShape<OrganizationMemberRow>
       >;
+      organization_services: TableDefinition<
+        OrganizationServiceRow,
+        InsertShape<OrganizationServiceRow, "organization_id" | "slug" | "name" | "duration_minutes">,
+        UpdateShape<OrganizationServiceRow>
+      >;
       connected_accounts: TableDefinition<
         ConnectedAccountRow,
         InsertShape<
@@ -1260,6 +1436,16 @@ export type Database = {
         IncomingMessageRow,
         InsertShape<IncomingMessageRow, "organization_id" | "received_at">,
         UpdateShape<IncomingMessageRow>
+      >;
+      website_chat_sessions: TableDefinition<
+        WebsiteChatSessionRow,
+        InsertShape<WebsiteChatSessionRow, "organization_id" | "session_token">,
+        UpdateShape<WebsiteChatSessionRow>
+      >;
+      website_chat_messages: TableDefinition<
+        WebsiteChatMessageRow,
+        InsertShape<WebsiteChatMessageRow, "organization_id" | "session_id" | "direction" | "body_text">,
+        UpdateShape<WebsiteChatMessageRow>
       >;
       appointment_requests: TableDefinition<
         AppointmentRequestRow,
@@ -1391,6 +1577,7 @@ export type Database = {
       calendar_provider: CalendarProvider;
       email_provider: EmailProvider;
       whatsapp_provider: WhatsAppProvider;
+      telegram_provider: TelegramProvider;
       daily_summary_status: DailySummaryStatus;
       execution_status: ExecutionStatus;
       execution_type: ExecutionType;
@@ -1543,6 +1730,29 @@ export function toConnectedWhatsAppAccount(row: ConnectedAccount): ConnectedWhat
   };
 }
 
+export function toConnectedTelegramAccount(row: ConnectedAccount): ConnectedTelegramAccount {
+  const metadata = toJsonRecord(row.metadata);
+
+  return {
+    id: row.id,
+    organizationId: row.organization_id,
+    provider: "telegram_bot",
+    botUserId: readJsonString(metadata, "botUserId") ?? row.provider_account_id,
+    botUsername: readJsonString(metadata, "botUsername"),
+    displayName: readJsonString(metadata, "displayName") ?? row.display_name,
+    accessTokenEncrypted: row.encrypted_access_token,
+    webhookSecret: readJsonString(metadata, "webhookSecret"),
+    enabled: metadata.enabled !== false,
+    status: row.status,
+    lastSyncedAt: row.last_synced_at,
+    lastSyncStatus: row.last_sync_status,
+    lastSyncError: row.last_sync_error,
+    lastTokenRefreshAt: row.last_token_refresh_at,
+    createdAt: row.created_at,
+    updatedAt: row.updated_at,
+  };
+}
+
 export function toNormalizedEmailMessage(row: IncomingMessage): NormalizedEmailMessage {
   const metadata = row.metadata && typeof row.metadata === "object" && !Array.isArray(row.metadata)
     ? row.metadata
@@ -1585,6 +1795,28 @@ export function toNormalizedWhatsAppMessage(row: IncomingMessage): NormalizedWha
     fromName: row.from_name,
     toPhoneNumberId: readJsonString(metadata, "toPhoneNumberId"),
     messageType: row.whatsapp_message_type ?? "text",
+    textBody: row.body_text,
+    receivedAt: row.received_at,
+    raw: metadata.raw ?? row.metadata,
+    createdAt: row.created_at,
+    updatedAt: row.updated_at,
+  };
+}
+
+export function toNormalizedTelegramMessage(row: IncomingMessage): NormalizedTelegramMessage {
+  const metadata = toJsonRecord(row.metadata);
+
+  return {
+    id: row.id,
+    organizationId: row.organization_id,
+    provider: row.telegram_provider ?? "telegram_bot",
+    providerMessageId: row.provider_message_id ?? row.telegram_message_id ?? "",
+    providerThreadId: row.thread_id ?? row.telegram_chat_id,
+    telegramAccountId: row.connected_account_id ?? "",
+    fromChatId: row.telegram_chat_id,
+    fromName: row.from_name,
+    fromUsername: readJsonString(metadata, "fromUsername"),
+    messageType: row.telegram_message_type ?? "text",
     textBody: row.body_text,
     receivedAt: row.received_at,
     raw: metadata.raw ?? row.metadata,

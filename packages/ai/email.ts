@@ -6,10 +6,12 @@ import type {
   ConnectedEmailAccount,
   Json,
   NormalizedEmailMessage,
+  OrganizationBrainContext,
   UserRule,
 } from "@soreya/shared";
 
 import { analyzeAppointmentTextWithAI } from "./appointment-ai";
+import { applyBrainEnrichmentToAnalysis, brainContextToJson } from "./brain";
 
 type RawRecord = Record<string, unknown>;
 
@@ -35,6 +37,7 @@ export type EmailAIContext = {
   userRules?: UserRule[];
   timezone?: string;
   calendarAvailability?: AvailabilitySlot[] | CalendarConflict | null;
+  brainContext?: OrganizationBrainContext;
 };
 
 const APPOINTMENT_KEYWORDS = [
@@ -139,7 +142,7 @@ export function detectAppointmentIntent(
     0.95,
     keywordMatches.length * 0.18 + (dateTimeText ? 0.35 : 0) + (message.fromEmail ? 0.1 : 0),
   );
-  const isAppointmentRequest = confidence >= 0.35;
+  const isAppointmentRequest = confidence >= 0.35 || keywordMatches.length >= 1;
   const requiresExplicitDate = userRules.some((rule) =>
     `${rule.title} ${rule.instruction}`.toLowerCase().includes("date required"),
   );
@@ -194,9 +197,14 @@ export function generateEmailReplyDraft(
   appointmentRequest: AppointmentRequestDraft | { requested_start?: string | null; requested_end?: string | null },
   calendarAvailability: AvailabilitySlot[] | CalendarConflict | null,
 ): EmailReplyDraft {
+  const italian = isItalianMessage(message);
   const alternatives = Array.isArray(calendarAvailability)
     ? calendarAvailability
     : calendarAvailability?.alternatives ?? [];
+  const conflictingEvents = Array.isArray(calendarAvailability)
+    ? []
+    : calendarAvailability?.conflictingEvents ?? [];
+  const hasConflict = conflictingEvents.length > 0;
   const requestedStart = "requestedStart" in appointmentRequest
     ? appointmentRequest.requestedStart
     : appointmentRequest.requested_start ?? null;
@@ -207,44 +215,102 @@ export function generateEmailReplyDraft(
   const recipient = message.fromEmail ?? "";
   const subject = message.subject?.toLowerCase().startsWith("re:")
     ? message.subject
-    : `Re: ${message.subject ?? "Appointment request"}`;
+    : `Re: ${message.subject ?? (italian ? "Richiesta appuntamento" : "Appointment request")}`;
 
-  let body = "Hi";
+  let body = italian ? "Buongiorno" : "Hi";
   body += message.fromName ? ` ${message.fromName}` : "";
   body += ",\n\n";
 
-  if (hasRequestedTime) {
-    body += `Thanks for your message. I can see the requested appointment time around ${formatDateTime(requestedStart)}.\n`;
-  } else {
-    body += "Thanks for your message. I can help with scheduling, but I need a little more information first.\n";
-  }
-
-  if (alternatives.length > 0) {
-    body += "\nPossible alternative slots:\n";
+  if (hasConflict && alternatives.length > 0 && hasRequestedTime) {
+    body += italian
+      ? `Grazie per il messaggio. Purtroppo ${formatAppointmentDateTime(requestedStart, italian)} non è disponibile. Le propongo questi orari:\n`
+      : `Thanks for your message. Unfortunately ${formatAppointmentDateTime(requestedStart, italian)} is not available. Here are some alternatives:\n`;
     body += alternatives
       .slice(0, 3)
-      .map((slot) => `- ${formatDateTime(slot.startsAt)} (${slot.durationMinutes} minutes)`)
+      .map((slot) => `- ${formatDateTime(slot.startsAt, italian)} (${slot.durationMinutes} ${italian ? "minuti" : "minutes"})`)
       .join("\n");
-    body += "\n";
+    body += italian
+      ? "\n\nMi faccia sapere quale opzione preferisce.\n\nCordiali saluti,\nSoreya"
+      : "\n\nPlease let me know which option works best.\n\nBest,\nSoreya";
+  } else if (hasRequestedTime) {
+    body += italian
+      ? `Grazie per il messaggio. Ho preso nota della preferenza per ${formatDateTime(requestedStart, italian)}: verifico la disponibilità e le confermo a breve.\n\nCordiali saluti,\nSoreya`
+      : `Thanks for your message. I noted your preference for ${formatDateTime(requestedStart, italian)}. I will check availability and confirm shortly.\n\nBest,\nSoreya`;
+  } else {
+    body += italian
+      ? "Grazie per il messaggio. Posso aiutarla con l'appuntamento, ma mi servono ancora alcune informazioni.\n\nCordiali saluti,\nSoreya"
+      : "Thanks for your message. I can help with scheduling, but I need a little more information first.\n\nBest,\nSoreya";
   }
 
-  body += "\nPlease confirm what works best.\n\nBest,\nSoreya";
-
   return { subject, body, recipient };
+}
+
+export function resolveSchedulingEmailReplyBody(
+  calendarDraftBody: string,
+  suggestedReplyBody: string | null | undefined,
+): string {
+  if (!suggestedReplyBody?.trim()) {
+    return calendarDraftBody;
+  }
+
+  const additiveBlocks = suggestedReplyBody
+    .split(/\n{2,}/)
+    .map((block) => block.trim())
+    .filter(Boolean)
+    .filter((block) => isAdditiveReplyBlock(block, calendarDraftBody));
+
+  if (additiveBlocks.length === 0) {
+    return calendarDraftBody;
+  }
+
+  const salutationPattern = /\n\n(Cordiali saluti,\nSoreya|Best,\nSoreya)$/i;
+  const salutationMatch = calendarDraftBody.match(salutationPattern);
+
+  if (salutationMatch?.index !== undefined) {
+    const insert = `\n\n${additiveBlocks.join("\n\n")}`;
+    return `${calendarDraftBody.slice(0, salutationMatch.index)}${insert}${calendarDraftBody.slice(salutationMatch.index)}`;
+  }
+
+  return `${calendarDraftBody}\n\n${additiveBlocks.join("\n\n")}`;
+}
+
+function isAdditiveReplyBlock(block: string, calendarDraftBody: string) {
+  const normalizedBlock = normalizeReplyComparisonText(block);
+  const normalizedDraft = normalizeReplyComparisonText(calendarDraftBody);
+
+  if (normalizedDraft.includes(normalizedBlock)) {
+    return false;
+  }
+
+  return /^(per |for |per i servizi|for the requested|per il tempo necessario|the indicated availability)/i.test(block)
+    || /^- .+:\s/.test(block);
+}
+
+function normalizeReplyComparisonText(value: string) {
+  return value
+    .normalize("NFD")
+    .replace(/\p{M}/gu, "")
+    .toLowerCase()
+    .replace(/[^a-z0-9\s]/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
 }
 
 export function generateNeedMoreInfoReply(
   message: NormalizedEmailMessage,
   missingFields: string[],
 ): EmailReplyDraft {
-  const fields = missingFields.length ? missingFields : ["preferred date", "preferred time"];
+  const italian = isItalianMessage(message);
+  const fields = localizeMissingFields(missingFields.length ? missingFields : ["date/time"], italian);
 
   return {
     subject: message.subject?.toLowerCase().startsWith("re:")
       ? message.subject
-      : `Re: ${message.subject ?? "Appointment request"}`,
+      : `Re: ${message.subject ?? (italian ? "Richiesta appuntamento" : "Appointment request")}`,
     recipient: message.fromEmail ?? "",
-    body: `Hi${message.fromName ? ` ${message.fromName}` : ""},\n\nThanks for your message. Could you send ${fields.join(" and ")} so I can check availability?\n\nBest,\nSoreya`,
+    body: italian
+      ? `Buongiorno${message.fromName ? ` ${message.fromName}` : ""},\n\nGrazie per il messaggio. Potrebbe indicarmi ${fields.join(" e ")} così verifico la disponibilità?\n\nCordiali saluti,\nSoreya`
+      : `Hi${message.fromName ? ` ${message.fromName}` : ""},\n\nThanks for your message. Could you send ${fields.join(" and ")} so I can check availability?\n\nBest,\nSoreya`,
   };
 }
 
@@ -267,9 +333,12 @@ export async function analyzeEmailWithAI(
   context: EmailAIContext = {},
 ): Promise<AppointmentIntent> {
   const heuristic = detectAppointmentIntent(message, context.userRules, context.timezone);
+  const messageText = [message.subject, message.snippet, message.bodyText, stripHtml(message.bodyHtml)]
+    .filter(Boolean)
+    .join("\n");
   const aiAnalysis = await analyzeAppointmentTextWithAI({
     source: "email",
-    text: [message.subject, message.snippet, message.bodyText, stripHtml(message.bodyHtml)].filter(Boolean).join("\n"),
+    text: messageText,
     subject: message.subject,
     timezone: context.timezone ?? heuristic.timezone ?? undefined,
     customerName: message.fromName,
@@ -279,10 +348,14 @@ export async function analyzeEmailWithAI(
       provider: message.provider,
       fromEmail: message.fromEmail,
       userRules: context.userRules?.map((rule) => ({ title: rule.title, instruction: rule.instruction })),
+      ...(context.brainContext ? brainContextToJson(context.brainContext) : {}),
     },
   });
+  const enrichedAnalysis = context.brainContext
+    ? applyBrainEnrichmentToAnalysis(context.brainContext, aiAnalysis, messageText, isItalianMessage(message) ? "it-IT" : "en-US")
+    : aiAnalysis;
 
-  return aiAnalysisToAppointmentIntent(aiAnalysis);
+  return aiAnalysisToAppointmentIntent(mergeAnalysisWithHeuristic(enrichedAnalysis, heuristic));
 }
 
 function appointmentIntentToAIAnalysis(intent: AppointmentIntent): AIAppointmentAnalysis {
@@ -458,8 +531,19 @@ function extractDateTimeText(text: string): string | null {
     return isoLike[0];
   }
 
-  const dayMonth = text.match(/\b(?:mon|tue|wed|thu|fri|sat|sun|monday|tuesday|wednesday|thursday|friday|saturday|sunday|tomorrow|today)\b(?:[^.\n]{0,40})?(?:\d{1,2}(?::\d{2})?\s?(?:am|pm)?)?/);
-  return dayMonth?.[0]?.trim() ?? null;
+  const normalized = normalizeForMatch(text);
+
+  const italianDay = normalized.match(
+    /(?:questo\s+)?(?:lunedi|martedi|mercoledi|giovedi|venerdi|sabato|domenica)(?:\s+(?:pomeriggio|mattina|sera|prossimo))?/i,
+  );
+  if (italianDay) {
+    return italianDay[0].trim();
+  }
+
+  const englishDay = normalized.match(
+    /\b(?:mon|tue|wed|thu|fri|sat|sun|monday|tuesday|wednesday|thursday|friday|saturday|sunday|tomorrow|today|domani|oggi)\b(?:[^.\n]{0,40})?(?:\d{1,2}(?::\d{2})?\s?(?:am|pm)?)?/i,
+  );
+  return englishDay?.[0]?.trim() ?? null;
 }
 
 function parseSimpleDateTime(value: string | null, timezone: string): { start: string | null; end: string | null } {
@@ -468,18 +552,25 @@ function parseSimpleDateTime(value: string | null, timezone: string): { start: s
   }
 
   const now = new Date();
-  const lower = value.toLowerCase();
+  const lower = normalizeForMatch(value);
   let start: Date | null = null;
 
   if (/^\d{4}-\d{2}-\d{2}/.test(value)) {
     start = new Date(value.includes(":") ? value : `${value}T09:00:00`);
-  } else if (lower.includes("tomorrow")) {
+  } else if (lower.includes("today") || lower.includes("oggi")) {
+    start = new Date(now);
+    start.setHours(readHour(value) ?? Math.max(now.getHours() + 1, 9), readMinute(value), 0, 0);
+  } else if (lower.includes("tomorrow") || lower.includes("domani")) {
     start = new Date(now);
     start.setDate(start.getDate() + 1);
     start.setHours(readHour(value) ?? 9, readMinute(value), 0, 0);
-  } else if (lower.includes("today")) {
-    start = new Date(now);
-    start.setHours(readHour(value) ?? Math.max(now.getHours() + 1, 9), readMinute(value), 0, 0);
+  } else {
+    const weekday = readItalianWeekdayOffset(lower, now);
+    if (weekday !== null) {
+      start = new Date(now);
+      start.setDate(start.getDate() + weekday);
+      start.setHours(readItalianDayPartHour(lower) ?? readHour(value) ?? 14, readMinute(value), 0, 0);
+    }
   }
 
   if (!start || Number.isNaN(start.getTime())) {
@@ -493,6 +584,54 @@ function parseSimpleDateTime(value: string | null, timezone: string): { start: s
     start: start.toISOString(),
     end: end.toISOString(),
   };
+}
+
+function readItalianDayPartHour(text: string): number | null {
+  if (text.includes("pomeriggio")) {
+    return 15;
+  }
+
+  if (text.includes("mattina")) {
+    return 10;
+  }
+
+  if (text.includes("sera")) {
+    return 18;
+  }
+
+  return null;
+}
+
+function readItalianWeekdayOffset(text: string, now: Date): number | null {
+  const normalized = normalizeForMatch(text);
+  const weekdays = [
+    { names: ["domenica"], index: 0 },
+    { names: ["lunedi"], index: 1 },
+    { names: ["martedi"], index: 2 },
+    { names: ["mercoledi"], index: 3 },
+    { names: ["giovedi"], index: 4 },
+    { names: ["venerdi"], index: 5 },
+    { names: ["sabato"], index: 6 },
+  ];
+
+  for (const weekday of weekdays) {
+    if (weekday.names.some((name) => normalized.includes(name))) {
+      const current = now.getDay();
+      let delta = weekday.index - current;
+
+      if (delta < 0) {
+        delta += 7;
+      }
+
+      if (delta === 0 || normalized.includes("questo")) {
+        return delta;
+      }
+
+      return delta;
+    }
+  }
+
+  return null;
 }
 
 function readHour(value: string): number | null {
@@ -533,15 +672,109 @@ function stripHtml(value: string | null): string | null {
   return value?.replace(/<[^>]+>/g, " ") ?? null;
 }
 
-function formatDateTime(value: string | null | undefined): string {
+function formatDateTime(value: string | null | undefined, italian = false): string {
   if (!value) {
-    return "the requested time";
+    return italian ? "l'orario richiesto" : "the requested time";
   }
 
-  return new Intl.DateTimeFormat("en", {
+  return new Intl.DateTimeFormat(italian ? "it-IT" : "en", {
     dateStyle: "medium",
     timeStyle: "short",
   }).format(new Date(value));
+}
+
+function formatAppointmentDateTime(value: string | null | undefined, italian = false): string {
+  if (!value) {
+    return italian ? "l'orario richiesto" : "the requested time";
+  }
+
+  const date = new Date(value);
+
+  if (italian) {
+    const day = new Intl.DateTimeFormat("it-IT", { day: "numeric" }).format(date);
+    const month = new Intl.DateTimeFormat("it-IT", { month: "long" }).format(date);
+    const year = new Intl.DateTimeFormat("it-IT", { year: "numeric" }).format(date);
+    const time = new Intl.DateTimeFormat("it-IT", {
+      hour: "2-digit",
+      minute: "2-digit",
+      hour12: false,
+    }).format(date);
+
+    return `il giorno ${day} ${month} ${year} alle ore ${time}`;
+  }
+
+  return new Intl.DateTimeFormat("en", {
+    dateStyle: "long",
+    timeStyle: "short",
+  }).format(date);
+}
+
+function normalizeForMatch(text: string): string {
+  return text
+    .toLowerCase()
+    .normalize("NFD")
+    .replace(/\p{M}/gu, "");
+}
+
+function isItalianMessage(message: NormalizedEmailMessage): boolean {
+  const text = [message.subject, message.snippet, message.bodyText, stripHtml(message.bodyHtml)]
+    .filter(Boolean)
+    .join(" ")
+    .toLowerCase();
+
+  return /\b(buongiorno|salve|grazie|appuntamento|vorrei|cordiali|pomeriggio|martedi|giovedi)\b/.test(text)
+    || /[àèéìòù]/i.test(text);
+}
+
+function localizeMissingFields(fields: string[], italian: boolean): string[] {
+  if (!italian) {
+    return fields.map((field) => {
+      if (field === "date/time") {
+        return "preferred date and time";
+      }
+
+      return field;
+    });
+  }
+
+  return fields.map((field) => {
+    if (field === "date/time" || field === "date" || field === "time") {
+      return "giorno e orario preferiti";
+    }
+
+    if (field === "customer") {
+      return "i suoi recapiti";
+    }
+
+    return field;
+  });
+}
+
+function mergeAnalysisWithHeuristic(
+  analysis: ReturnType<typeof appointmentIntentToAIAnalysis>,
+  heuristic: AppointmentIntent,
+): ReturnType<typeof appointmentIntentToAIAnalysis> {
+  const requestedStartsAt = analysis.requestedStartsAt ?? heuristic.requestedStartsAt;
+  const requestedEndsAt = analysis.requestedEndsAt ?? heuristic.requestedEndsAt;
+  const requestedDateTimeText = analysis.requestedDateTimeText ?? heuristic.requestedDateTimeText;
+  const hasDates = Boolean(requestedStartsAt && requestedEndsAt);
+  const missingFields = (analysis.missingFields ?? []).filter((field) => {
+    if (!hasDates) {
+      return true;
+    }
+
+    return field !== "date/time" && field !== "date" && field !== "time";
+  });
+
+  return {
+    ...analysis,
+    isAppointmentRequest: analysis.isAppointmentRequest || heuristic.isAppointmentRequest,
+    requestedStartsAt,
+    requestedEndsAt,
+    requestedDateTimeText,
+    needsMoreInfo: hasDates ? false : analysis.needsMoreInfo,
+    missingFields: hasDates ? missingFields : analysis.missingFields,
+  };
 }
 
 function readString(value: unknown): string | null {

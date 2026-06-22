@@ -1,8 +1,12 @@
 import { generateDailySummaryForOrganization } from "@/lib/server/daily-summary";
 import { jsonError } from "@/lib/server/email-api";
 import { syncGmail, syncGoogleCalendar, syncMicrosoftCalendar, syncMicrosoftMail } from "@/lib/server/provider-sync";
-import { checkRateLimit, rateLimitResponse } from "@/lib/server/rate-limit";
-import { createServerSupabaseClient, getAuthenticatedServerContext } from "@/lib/server/supabase";
+import { checkRateLimitAsync, rateLimitResponse } from "@/lib/server/rate-limit";
+import {
+  createIntegrationServerSupabaseClient,
+  createServerSupabaseClient,
+  getAuthenticatedServerContext,
+} from "@/lib/server/supabase";
 import { refreshOrganizationTokens } from "@/lib/server/token-refresh";
 import { z } from "zod";
 
@@ -20,7 +24,7 @@ const syncRunSchema = z.object({
 
 export async function POST(request: Request) {
   try {
-    const rateLimit = checkRateLimit(request, { route: "/api/sync/run", limit: 20 });
+    const rateLimit = await checkRateLimitAsync(request, { route: "/api/sync/run", limit: 20 });
 
     if (!rateLimit.allowed) {
       return rateLimitResponse(rateLimit);
@@ -44,7 +48,7 @@ export async function POST(request: Request) {
         return Response.json({ error: "organizationId is required for cron sync." }, { status: 400 });
       }
 
-      const supabase = createServerSupabaseClient();
+      const supabase = createIntegrationServerSupabaseClient();
       const report = await runSyncPlan(supabase, {
         organizationId: body.organizationId,
         timezone: "Europe/Rome",

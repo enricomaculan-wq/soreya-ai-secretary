@@ -1,19 +1,12 @@
 import { getAuthenticatedServerContext } from "@/lib/server/supabase";
-import { jsonError, readGoogleOAuthConfig, setOAuthState } from "@/lib/server/calendar-api";
+import { jsonError, GOOGLE_CALENDAR_OAUTH_SCOPES, readGoogleOAuthConfig, setOAuthState } from "@/lib/server/calendar-api";
 import { randomUUID } from "node:crypto";
 import { NextResponse } from "next/server";
 
-const GOOGLE_SCOPES = [
-  "openid",
-  "email",
-  "profile",
-  "https://www.googleapis.com/auth/calendar.events.readonly",
-];
-
-export async function GET() {
+export async function GET(request: Request) {
   try {
     await getAuthenticatedServerContext();
-    const config = readGoogleOAuthConfig();
+    const config = readGoogleOAuthConfig(request);
     const state = randomUUID();
     await setOAuthState("google", state);
 
@@ -21,7 +14,7 @@ export async function GET() {
     url.searchParams.set("client_id", config.clientId);
     url.searchParams.set("redirect_uri", config.redirectUri);
     url.searchParams.set("response_type", "code");
-    url.searchParams.set("scope", GOOGLE_SCOPES.join(" "));
+    url.searchParams.set("scope", GOOGLE_CALENDAR_OAUTH_SCOPES.join(" "));
     url.searchParams.set("access_type", "offline");
     url.searchParams.set("prompt", "consent");
     url.searchParams.set("state", state);

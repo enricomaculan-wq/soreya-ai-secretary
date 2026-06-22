@@ -3,8 +3,12 @@ import {
   getNotificationTokensForUser,
   type SoreyaSupabaseClient,
 } from "@soreya/database";
-import type { Json, NotificationPayload, NotificationType, SmartwatchNotificationPayload } from "@soreya/shared";
+import { SOREYA_DEEP_LINKS, type Json, type NotificationPayload, type NotificationType, type SmartwatchNotificationPayload } from "@soreya/shared";
 
+import {
+  buildWebsiteInboundNotificationPayload,
+  type WebsiteInboundChannel,
+} from "@/lib/server/website-inbound-notifications";
 import { SMARTWATCH_SAFETY_COPY } from "@/lib/server/watch-notifications";
 
 export type ExpoNotificationResult = {
@@ -175,6 +179,44 @@ export function notifyEmergencyActionsCreated(
   });
 }
 
+export async function notifyWebsiteInboundMessage(
+  supabase: SoreyaSupabaseClient,
+  input: {
+    organizationId: string;
+    channel: WebsiteInboundChannel;
+    messageSnippet: string;
+  },
+): Promise<ExpoNotificationResult> {
+  if (!pushNotificationsEnabled()) {
+    return disabledResult();
+  }
+
+  const adminUserIds = await getOrganizationAdminUserIds(supabase, input.organizationId);
+  const payload = buildWebsiteInboundNotificationPayload(input.channel, input.messageSnippet);
+  const results = await Promise.all(
+    adminUserIds.map((userId) =>
+      sendNotificationToUser(supabase, {
+        organizationId: input.organizationId,
+        userId,
+        type: payload.type,
+        title: payload.title,
+        body: payload.body,
+        data: {
+          deepLink: SOREYA_DEEP_LINKS.approvals,
+          source: input.channel === "form" ? "website_form" : "website_chat",
+        },
+      }).catch(() => disabledResult()),
+    ),
+  );
+
+  return {
+    enabled: true,
+    sent: results.reduce((total, result) => total + result.sent, 0),
+    disabled: false,
+    tickets: results.flatMap((result) => result.tickets),
+  };
+}
+
 export function safeNotificationType(value: unknown): NotificationType | null {
   return typeof value === "string" && SAFE_NOTIFICATION_TYPES.includes(value as NotificationType)
     ? value as NotificationType
@@ -234,4 +276,21 @@ function categoryIdForSmartwatchPayload(
   }
 
   return "SOREYA_OPEN";
+}
+
+async function getOrganizationAdminUserIds(
+  supabase: SoreyaSupabaseClient,
+  organizationId: string,
+): Promise<string[]> {
+  const { data, error } = await supabase
+    .from("organization_members")
+    .select("user_id")
+    .eq("organization_id", organizationId)
+    .in("role", ["owner", "admin"]);
+
+  if (error) {
+    throw error;
+  }
+
+  return [...new Set((data ?? []).map((row) => row.user_id))];
 }

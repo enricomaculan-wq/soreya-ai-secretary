@@ -10,7 +10,7 @@ import type { Json, SmartwatchActionType } from "@soreya/shared";
 import { z } from "zod";
 
 import { jsonError } from "@/lib/server/daily-summary-api";
-import { checkRateLimit, rateLimitResponse } from "@/lib/server/rate-limit";
+import { checkRateLimitAsync, rateLimitResponse } from "@/lib/server/rate-limit";
 import {
   createServiceRoleServerSupabaseClient,
   getAuthenticatedServerContext,
@@ -55,7 +55,7 @@ type ActionContext = {
 };
 
 export async function POST(request: Request) {
-  const rateLimit = checkRateLimit(request, { route: "/api/notifications/action", limit: 30 });
+  const rateLimit = await checkRateLimitAsync(request, { route: "/api/notifications/action", limit: 30 });
 
   if (!rateLimit.allowed) {
     return rateLimitResponse(rateLimit);

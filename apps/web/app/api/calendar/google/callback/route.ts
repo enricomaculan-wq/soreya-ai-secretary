@@ -1,10 +1,11 @@
 import { normalizeGoogleCalendarEvent } from "@soreya/ai";
 import { upsertConnectedCalendarAccount } from "@soreya/database";
 
-import { jsonError, readGoogleOAuthConfig, scopesFromTokenResponse, verifyOAuthState, type OAuthTokenResponse } from "@/lib/server/calendar-api";
 import { encryptToken } from "@/lib/server/token-encryption";
 import { getAuthenticatedServerContext } from "@/lib/server/supabase";
 import { NextResponse } from "next/server";
+
+import { readGoogleOAuthConfig, GOOGLE_CALENDAR_OAUTH_SCOPES, scopesFromTokenResponse, verifyOAuthState, type OAuthTokenResponse } from "@/lib/server/calendar-api";
 
 type GoogleProfile = {
   id?: string;
@@ -12,12 +13,7 @@ type GoogleProfile = {
   name?: string;
 };
 
-const GOOGLE_FALLBACK_SCOPES = [
-  "openid",
-  "email",
-  "profile",
-  "https://www.googleapis.com/auth/calendar.events.readonly",
-];
+const GOOGLE_FALLBACK_SCOPES = [...GOOGLE_CALENDAR_OAUTH_SCOPES];
 
 export async function GET(request: Request) {
   const url = new URL(request.url);
@@ -31,7 +27,7 @@ export async function GET(request: Request) {
     }
 
     const context = await getAuthenticatedServerContext();
-    const config = readGoogleOAuthConfig();
+    const config = readGoogleOAuthConfig(request);
     const tokenResponse = await exchangeGoogleCode(code, config);
 
     if (!tokenResponse.access_token) {
@@ -68,7 +64,11 @@ export async function GET(request: Request) {
 
     return NextResponse.redirect(new URL("/settings?calendar=google-connected", request.url));
   } catch (error) {
-    return jsonError(error, 400);
+    const message = error instanceof Error ? error.message : String(error);
+    const redirectUrl = new URL("/settings", request.url);
+    redirectUrl.searchParams.set("calendar", "google-error");
+    redirectUrl.searchParams.set("error", message);
+    return NextResponse.redirect(redirectUrl);
   }
 }
 

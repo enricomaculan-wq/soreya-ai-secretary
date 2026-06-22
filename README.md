@@ -1,5 +1,7 @@
 # Soreya
 
+[![Verify](https://github.com/enricomaculan-wq/soreya-ai-secretary/actions/workflows/verify.yml/badge.svg)](https://github.com/enricomaculan-wq/soreya-ai-secretary/actions/workflows/verify.yml)
+
 Soreya is an approval-first AI secretary for email, calendar, WhatsApp Business, quick call notes, daily summaries and emergency workflows. It can analyze inbound context and prepare suggested actions, but external sends and calendar mutations stay behind explicit approval and dry-run safety.
 
 ## Monorepo
@@ -89,6 +91,10 @@ Dry-run means Soreya records the execution attempt and response preview, but it 
 - No calendar event is created, updated or deleted automatically.
 - Sync reads calendars/messages and refreshes tokens only.
 - Notifications alert users; they do not approve or execute actions.
+
+## CI
+
+Every push to `main` and every pull request runs [`npm run verify`](.github/workflows/verify.yml): unit tests, web production build, web lint, mobile TypeScript check, and mobile lint. The web build needs network access for `next/font/google`.
 
 ## Pre-Production Checklist
 

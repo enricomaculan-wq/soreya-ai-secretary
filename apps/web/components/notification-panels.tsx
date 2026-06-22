@@ -54,7 +54,7 @@ export function NotificationSettingsPanel() {
   }
 
   return (
-    <div className="rounded-lg border border-stone-200 bg-stone-50 p-4">
+    <div className="soreya-card-muted p-4">
       <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
         <div>
           <p className="text-sm font-medium text-stone-950">{t("notifications.expoPush")}</p>

@@ -1,6 +1,8 @@
 import type { Metadata } from "next";
-import { Geist, Geist_Mono } from "next/font/google";
+import { Geist, Geist_Mono, Inter } from "next/font/google";
 import { Analytics } from "@vercel/analytics/next";
+import { AnalyticsPageView } from "@/components/analytics-page-view";
+import { GoogleAnalytics } from "@/components/google-analytics";
 import "./globals.css";
 
 const geistSans = Geist({
@@ -13,9 +15,14 @@ const geistMono = Geist_Mono({
   subsets: ["latin"],
 });
 
+const inter = Inter({
+  variable: "--font-inter",
+  subsets: ["latin"],
+});
+
 export const metadata: Metadata = {
   title: "Soreya",
-  description: "Dashboard segreteria AI per approvazioni, inbox e calendario.",
+  description: "Segretario digitale per studi medici e dentistici. Tu approvi, Soreya prepara bozze da email, WhatsApp e calendario.",
 };
 
 export default function RootLayout({
@@ -26,9 +33,11 @@ export default function RootLayout({
   return (
     <html
       lang="it"
-      className={`${geistSans.variable} ${geistMono.variable} h-full antialiased`}
+      className={`${geistSans.variable} ${geistMono.variable} ${inter.variable} h-full antialiased`}
     >
       <body className="min-h-full">
+        <GoogleAnalytics />
+        <AnalyticsPageView />
         {children}
         <Analytics />
       </body>

@@ -5,10 +5,11 @@ import {
   type UserOrganization,
 } from "@soreya/database";
 import type { User } from "@supabase/supabase-js";
-import { cookies } from "next/headers";
+import { cookies, headers } from "next/headers";
 
-export const SOREYA_ACCESS_TOKEN_COOKIE = "soreya-sb-access-token";
-export const SOREYA_REFRESH_TOKEN_COOKIE = "soreya-sb-refresh-token";
+import { SOREYA_ACCESS_TOKEN_COOKIE, SOREYA_REFRESH_TOKEN_COOKIE } from "@/lib/auth-cookies";
+
+export { SOREYA_ACCESS_TOKEN_COOKIE, SOREYA_REFRESH_TOKEN_COOKIE };
 
 export class ServerAuthError extends Error {
   constructor(
@@ -50,10 +51,16 @@ export function createServerSupabaseClient(accessToken?: string): SoreyaSupabase
 }
 
 export function createServiceRoleServerSupabaseClient(): SoreyaSupabaseClient {
+  const serviceRoleKey = process.env.SUPABASE_SERVICE_ROLE_KEY?.trim();
+
+  if (!serviceRoleKey) {
+    throw new Error("SUPABASE_SERVICE_ROLE_KEY is required for server integration routes.");
+  }
+
   return createSoreyaSupabaseClientFromEnv(
     {
       NEXT_PUBLIC_SUPABASE_URL: process.env.NEXT_PUBLIC_SUPABASE_URL,
-      NEXT_PUBLIC_SUPABASE_ANON_KEY: process.env.SUPABASE_SERVICE_ROLE_KEY,
+      NEXT_PUBLIC_SUPABASE_ANON_KEY: serviceRoleKey,
     },
     {
       auth: {
@@ -65,9 +72,39 @@ export function createServiceRoleServerSupabaseClient(): SoreyaSupabaseClient {
   );
 }
 
-export async function getAuthenticatedServerContext(): Promise<AuthenticatedServerContext> {
+export function createIntegrationServerSupabaseClient(): SoreyaSupabaseClient {
+  if (process.env.SUPABASE_SERVICE_ROLE_KEY?.trim()) {
+    return createServiceRoleServerSupabaseClient();
+  }
+
+  if (process.env.NODE_ENV === "production") {
+    throw new Error("SUPABASE_SERVICE_ROLE_KEY is required in production for integration routes.");
+  }
+
+  return createServerSupabaseClient();
+}
+
+async function resolveServerAccessToken(): Promise<string | null> {
   const cookieStore = await cookies();
-  const accessToken = cookieStore.get(SOREYA_ACCESS_TOKEN_COOKIE)?.value;
+  const cookieToken = cookieStore.get(SOREYA_ACCESS_TOKEN_COOKIE)?.value;
+
+  if (cookieToken) {
+    return cookieToken;
+  }
+
+  const requestHeaders = await headers();
+  const authorization = requestHeaders.get("authorization");
+
+  if (authorization?.startsWith("Bearer ")) {
+    const bearerToken = authorization.slice("Bearer ".length).trim();
+    return bearerToken || null;
+  }
+
+  return null;
+}
+
+export async function getAuthenticatedServerContext(): Promise<AuthenticatedServerContext> {
+  const accessToken = await resolveServerAccessToken();
 
   if (!accessToken) {
     throw new ServerAuthError("Authentication required.");

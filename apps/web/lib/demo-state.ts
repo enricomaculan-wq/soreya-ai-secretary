@@ -154,7 +154,7 @@ export function buildDemoQuickCallResult(locale: SupportedLocale, rawText: strin
     id: callNoteId,
     organizationId: demo.organization.id,
     createdBy: demo.membership.user_id,
-    rawText: `[DEMO] ${normalizedText}`,
+    rawText: normalizedText,
     status: "pending_approval",
     intentType: "callback_request",
     confidence: 0.82,

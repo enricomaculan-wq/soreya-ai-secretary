@@ -32,6 +32,9 @@ alter table public.emergency_actions
 drop constraint if exists emergency_actions_approval_required_for_execution,
 drop constraint if exists emergency_actions_approval_data_pair;
 
+drop policy if exists "Members can create emergency actions for approval" on public.emergency_actions;
+drop policy if exists "Owners and admins can update emergency actions" on public.emergency_actions;
+
 alter table public.emergency_actions
 alter column status drop default;
 
@@ -54,6 +57,32 @@ add column if not exists message_tone text not null default 'professional',
 add column if not exists affected_events_count integer not null default 0,
 add column if not exists suggested_actions_count integer not null default 0,
 add column if not exists metadata jsonb not null default '{}'::jsonb;
+
+create policy "Members can create emergency actions for approval"
+on public.emergency_actions for insert
+with check (
+  public.current_user_is_org_member(organization_id)
+  and status = 'pending_approval'::public.emergency_action_status
+);
+
+create policy "Owners and admins can update emergency actions"
+on public.emergency_actions for update
+using (public.current_user_has_org_role(organization_id, array['owner', 'admin']::public.organization_role[]))
+with check (
+  public.current_user_has_org_role(organization_id, array['owner', 'admin']::public.organization_role[])
+  and status in (
+    'draft',
+    'pending_approval',
+    'approved',
+    'partially_approved',
+    'rejected',
+    'cancelled',
+    'completed'
+  )
+);
+
+alter table public.emergency_actions
+drop constraint if exists emergency_actions_message_tone_check;
 
 alter table public.emergency_actions
 add constraint emergency_actions_message_tone_check

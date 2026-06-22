@@ -1,10 +1,17 @@
-import { getUserOrganization, type UserOrganization } from '@soreya/database';
+import { createOrganizationForUser, getUserOrganization, type UserOrganization } from '@soreya/database';
 import type { User } from '@supabase/supabase-js';
 import type { ReactNode } from 'react';
 import { createContext, useCallback, useContext, useEffect, useMemo, useState } from 'react';
-import { Pressable, StyleSheet, Text, TextInput, View } from 'react-native';
+import { Pressable, Text, TextInput, View } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 
+import {
+  AuthCard,
+  AuthNotice,
+  AuthNoticeText,
+  authFieldStyles,
+  authScreenStyles,
+} from '@/components/auth-card';
 import { getMobileDemoData, shouldUseMobileDemoData } from '@/lib/demo-data';
 import { useI18n } from '@/lib/i18n';
 import { getSupabaseMobileClient, hasSupabaseMobileConfig } from '@/lib/supabase';
@@ -166,8 +173,8 @@ export function MobileAuthGate({ children }: { children: ReactNode }) {
 
   if (isChecking) {
     return (
-      <SafeAreaView style={styles.screen}>
-        <Text style={styles.loadingText}>{t('common.loading')}...</Text>
+      <SafeAreaView style={authScreenStyles.screen}>
+        <Text style={authScreenStyles.loadingText}>{t('common.loading')}...</Text>
       </SafeAreaView>
     );
   }
@@ -175,11 +182,22 @@ export function MobileAuthGate({ children }: { children: ReactNode }) {
   if (!user) {
     return (
       <LoginScreen
+        demoMode={demoMode}
         hasConfig={hasConfig}
         initialMessage={message}
         onAuthenticated={async (nextUser) => {
           setUser(nextUser);
           await loadOrganizationForUser(nextUser);
+        }}
+      />
+    );
+  }
+
+  if (!userOrganization && hasConfig && !demoMode) {
+    return (
+      <OnboardingScreen
+        onCreated={async () => {
+          await loadOrganizationForUser(user);
         }}
       />
     );
@@ -213,10 +231,12 @@ function createDemoUserOrganization(locale: 'it' | 'en'): UserOrganization {
 }
 
 function LoginScreen({
+  demoMode,
   hasConfig,
   initialMessage,
   onAuthenticated,
 }: {
+  demoMode: boolean;
   hasConfig: boolean;
   initialMessage: string | null;
   onAuthenticated: (user: User) => Promise<void>;
@@ -232,7 +252,7 @@ function LoginScreen({
     setMessage(null);
 
     if (!hasConfig) {
-      setMessage('Supabase');
+      setMessage(t('login.missingSupabase'));
       return;
     }
 
@@ -264,29 +284,34 @@ function LoginScreen({
   }
 
   return (
-    <SafeAreaView style={styles.screen}>
-      <View style={styles.card}>
-        <Text style={styles.eyebrow}>Soreya</Text>
-        <Text style={styles.title}>{mode === 'sign-in' ? t('login.signIn') : t('login.signUp')}</Text>
-        <Text style={styles.body}>
-          {t('login.description')}
-        </Text>
-
-        {!hasConfig ? (
-          <View style={styles.warningBox}>
-            <Text style={styles.warningText}>{t('login.missingSupabase')}</Text>
-          </View>
+    <SafeAreaView style={authScreenStyles.screen}>
+      <AuthCard
+        badge={demoMode ? t('demo.badge') : undefined}
+        description={demoMode ? t('demo.description') : t('login.description')}
+        eyebrow="Soreya"
+        title={mode === 'sign-in' ? t('login.signIn') : t('login.signUp')}
+      >
+        {!hasConfig && !demoMode ? (
+          <AuthNotice tone="warning">
+            <AuthNoticeText tone="warning">{t('login.missingSupabase')}</AuthNoticeText>
+          </AuthNotice>
         ) : null}
 
-        <View style={styles.form}>
+        {demoMode ? (
+          <AuthNotice tone="warning">
+            <AuthNoticeText tone="warning">{t('demo.loginDescription')}</AuthNoticeText>
+          </AuthNotice>
+        ) : null}
+
+        <View style={authFieldStyles.form}>
           <TextInput
             autoCapitalize="none"
             autoComplete="email"
             keyboardType="email-address"
             onChangeText={setEmail}
-            placeholder="Email"
-            placeholderTextColor="#a8a29e"
-            style={styles.input}
+            placeholder={t('login.email')}
+            placeholderTextColor="#a3a3a3"
+            style={authFieldStyles.input}
             value={email}
           />
           <TextInput
@@ -294,24 +319,24 @@ function LoginScreen({
             autoComplete={mode === 'sign-in' ? 'current-password' : 'new-password'}
             onChangeText={setPassword}
             placeholder={t('login.password')}
-            placeholderTextColor="#a8a29e"
+            placeholderTextColor="#a3a3a3"
             secureTextEntry
-            style={styles.input}
+            style={authFieldStyles.input}
             value={password}
           />
 
           {message ? (
-            <View style={styles.messageBox}>
-              <Text style={styles.messageText}>{message}</Text>
+            <View style={authFieldStyles.messageBox}>
+              <Text style={authFieldStyles.messageText}>{message}</Text>
             </View>
           ) : null}
 
           <Pressable
             disabled={isSubmitting || !hasConfig}
             onPress={submit}
-            style={[styles.primaryButton, (isSubmitting || !hasConfig) && styles.disabledButton]}
+            style={[authFieldStyles.primaryButton, (isSubmitting || !hasConfig) && authFieldStyles.disabledButton]}
           >
-            <Text style={styles.primaryButtonText}>
+            <Text style={authFieldStyles.primaryButtonText}>
               {isSubmitting ? `${t('common.loading')}...` : mode === 'sign-in' ? t('login.signIn') : t('login.signUp')}
             </Text>
           </Pressable>
@@ -321,121 +346,98 @@ function LoginScreen({
               setMode(mode === 'sign-in' ? 'sign-up' : 'sign-in');
               setMessage(null);
             }}
-            style={styles.secondaryButton}
+            style={authFieldStyles.secondaryLink}
           >
-            <Text style={styles.secondaryButtonText}>
+            <Text style={authFieldStyles.secondaryLinkText}>
               {mode === 'sign-in' ? t('login.createAccount') : t('login.useExisting')}
             </Text>
           </Pressable>
         </View>
-      </View>
+      </AuthCard>
     </SafeAreaView>
   );
 }
 
-const styles = StyleSheet.create({
-  screen: {
-    alignItems: 'center',
-    backgroundColor: '#f7f6f2',
-    flex: 1,
-    justifyContent: 'center',
-    padding: 20,
-  },
-  loadingText: {
-    color: '#57534e',
-    fontSize: 15,
-    fontWeight: '600',
-  },
-  card: {
-    backgroundColor: '#ffffff',
-    borderColor: '#e7e5e4',
-    borderRadius: 8,
-    borderWidth: 1,
-    padding: 22,
-    width: '100%',
-  },
-  eyebrow: {
-    color: '#047857',
-    fontSize: 12,
-    fontWeight: '700',
-    letterSpacing: 1.2,
-    textTransform: 'uppercase',
-  },
-  title: {
-    color: '#1c1917',
-    fontSize: 32,
-    fontWeight: '800',
-    lineHeight: 38,
-    marginTop: 8,
-  },
-  body: {
-    color: '#78716c',
-    fontSize: 14,
-    lineHeight: 21,
-    marginTop: 8,
-  },
-  warningBox: {
-    backgroundColor: '#fffbeb',
-    borderColor: '#fde68a',
-    borderRadius: 8,
-    borderWidth: 1,
-    marginTop: 16,
-    padding: 12,
-  },
-  warningText: {
-    color: '#92400e',
-    fontSize: 13,
-    lineHeight: 18,
-  },
-  form: {
-    gap: 12,
-    marginTop: 18,
-  },
-  input: {
-    backgroundColor: '#ffffff',
-    borderColor: '#d6d3d1',
-    borderRadius: 8,
-    borderWidth: 1,
-    color: '#1c1917',
-    fontSize: 15,
-    minHeight: 48,
-    paddingHorizontal: 14,
-  },
-  messageBox: {
-    backgroundColor: '#f5f5f4',
-    borderColor: '#e7e5e4',
-    borderRadius: 8,
-    borderWidth: 1,
-    padding: 12,
-  },
-  messageText: {
-    color: '#57534e',
-    fontSize: 13,
-    lineHeight: 18,
-  },
-  primaryButton: {
-    alignItems: 'center',
-    backgroundColor: '#1c1917',
-    borderRadius: 8,
-    minHeight: 48,
-    justifyContent: 'center',
-  },
-  disabledButton: {
-    backgroundColor: '#a8a29e',
-  },
-  primaryButtonText: {
-    color: '#ffffff',
-    fontSize: 15,
-    fontWeight: '700',
-  },
-  secondaryButton: {
-    alignItems: 'center',
-    minHeight: 44,
-    justifyContent: 'center',
-  },
-  secondaryButtonText: {
-    color: '#047857',
-    fontSize: 15,
-    fontWeight: '700',
-  },
-});
+function OnboardingScreen({ onCreated }: { onCreated: () => Promise<void> }) {
+  const { t } = useI18n();
+  const [organizationName, setOrganizationName] = useState('');
+  const [timezone, setTimezone] = useState('Europe/Rome');
+  const [message, setMessage] = useState<string | null>(null);
+  const [isSubmitting, setIsSubmitting] = useState(false);
+
+  async function submit() {
+    setMessage(null);
+    setIsSubmitting(true);
+
+    try {
+      await createOrganizationForUser(getSupabaseMobileClient(), {
+        name: organizationName,
+        timezone,
+      });
+      await onCreated();
+    } catch (error) {
+      setMessage(error instanceof Error ? error.message : t('common.unavailable'));
+    } finally {
+      setIsSubmitting(false);
+    }
+  }
+
+  return (
+    <SafeAreaView style={authScreenStyles.screen}>
+      <AuthCard
+        description={t('onboarding.description')}
+        eyebrow={t('onboarding.eyebrow')}
+        title={t('onboarding.title')}
+      >
+        <View style={authFieldStyles.form}>
+          <View>
+            <Text style={authFieldStyles.label}>{t('onboarding.organizationName')}</Text>
+            <TextInput
+              autoCapitalize="words"
+              onChangeText={setOrganizationName}
+              placeholder={t('onboarding.organizationName')}
+              placeholderTextColor="#a3a3a3"
+              style={authFieldStyles.input}
+              value={organizationName}
+            />
+          </View>
+
+          <View>
+            <Text style={authFieldStyles.label}>{t('onboarding.defaultTimezone')}</Text>
+            <TextInput
+              autoCapitalize="none"
+              onChangeText={setTimezone}
+              placeholder="Europe/Rome"
+              placeholderTextColor="#a3a3a3"
+              style={authFieldStyles.input}
+              value={timezone}
+            />
+          </View>
+
+          <AuthNotice tone="trust">
+            <AuthNoticeText tone="trust">{t('onboarding.firstMembership')}</AuthNoticeText>
+          </AuthNotice>
+
+          {message ? (
+            <View style={authFieldStyles.messageBox}>
+              <Text style={authFieldStyles.messageText}>{message}</Text>
+            </View>
+          ) : null}
+
+          <Pressable
+            disabled={isSubmitting || organizationName.trim().length < 2}
+            onPress={submit}
+            style={[
+              authFieldStyles.primaryButton,
+              (isSubmitting || organizationName.trim().length < 2) && authFieldStyles.disabledButton,
+            ]}
+          >
+            <Text style={authFieldStyles.primaryButtonText}>
+              {isSubmitting ? `${t('common.loading')}...` : t('onboarding.createOrganization')}
+            </Text>
+          </Pressable>
+        </View>
+      </AuthCard>
+    </SafeAreaView>
+  );
+}

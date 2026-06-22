@@ -72,7 +72,7 @@ export function getProviderStatus(env: NodeJS.ProcessEnv = process.env): Record<
       "googleCalendar",
       "Google Calendar",
       ["GOOGLE_CLIENT_ID", "GOOGLE_CLIENT_SECRET", "GOOGLE_REDIRECT_URI", "CALENDAR_TOKEN_ENCRYPTION_KEY"],
-      ["OAuth scope is read-only in this phase."],
+      ["OAuth includes calendar.events.readonly and calendar.events; reconnect Google Calendar after enabling write."],
     ),
     gmail: buildFallbackStatus(
       env,
@@ -84,7 +84,7 @@ export function getProviderStatus(env: NodeJS.ProcessEnv = process.env): Record<
         ["GOOGLE_GMAIL_REDIRECT_URI"],
         ["EMAIL_TOKEN_ENCRYPTION_KEY"],
       ],
-      ["Dedicated GOOGLE_GMAIL_* env vars are preferred; GOOGLE_* fallback remains supported."],
+      ["Dedicated GOOGLE_GMAIL_* env vars are preferred; GOOGLE_* fallback remains supported.", "OAuth includes gmail.readonly and gmail.send; reconnect Gmail after enabling send."],
     ),
     microsoftCalendar: buildRequiredStatus(
       env,
@@ -157,7 +157,9 @@ export function getProviderStatus(env: NodeJS.ProcessEnv = process.env): Record<
       enabledEnv: "ENABLE_RATE_LIMIT",
       requiredWhenEnabled: [],
       disabledDetail: "Rate limiting is disabled by ENABLE_RATE_LIMIT=false or missing env.",
-      readyDetail: `In-memory best-effort limit enabled: ${env.RATE_LIMIT_MAX_REQUESTS ?? "60"} requests per ${env.RATE_LIMIT_WINDOW_SECONDS ?? "60"} seconds.`,
+      readyDetail: hasEnv(env, "UPSTASH_REDIS_REST_URL") && hasEnv(env, "UPSTASH_REDIS_REST_TOKEN")
+        ? `Distributed Upstash limit enabled: ${env.RATE_LIMIT_MAX_REQUESTS ?? "60"} requests per ${env.RATE_LIMIT_WINDOW_SECONDS ?? "60"} seconds.`
+        : `In-memory best-effort limit enabled: ${env.RATE_LIMIT_MAX_REQUESTS ?? "60"} requests per ${env.RATE_LIMIT_WINDOW_SECONDS ?? "60"} seconds.`,
     }),
     syncScheduler: buildToggleStatus(env, {
       key: "syncScheduler",
@@ -187,9 +189,9 @@ export function getProviderStatus(env: NodeJS.ProcessEnv = process.env): Record<
       details: [
         safety.dryRun
           ? "Dry-run is enabled. No external email, WhatsApp message or calendar mutation is performed."
-          : "Dry-run is disabled. Real adapters still return safe blocked results until final provider execution is implemented.",
-        `Email execution: ${safety.providers.email ? "enabled" : "disabled"}.`,
-        `WhatsApp execution: ${safety.providers.whatsapp ? "enabled" : "disabled"}.`,
+          : "Dry-run is disabled. WhatsApp can send via Cloud API when enabled; email and calendar adapters remain blocked.",
+        `Email execution: ${safety.providers.email ? "enabled (adapter pending)" : "disabled"}.`,
+        `WhatsApp execution: ${safety.providers.whatsapp ? "enabled (Cloud API)" : "disabled"}.`,
         `Calendar execution: ${safety.providers.calendar ? "enabled" : "disabled"}.`,
       ],
     },

@@ -2,6 +2,8 @@ import type { ReactNode } from 'react';
 import { Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 
+import { SoreyaDesign as D } from '@/constants/design';
+
 type ScreenProps = {
   title: string;
   eyebrow?: string;
@@ -10,7 +12,7 @@ type ScreenProps = {
 
 type BadgeProps = {
   label: string;
-  tone?: 'neutral' | 'success' | 'warning' | 'danger';
+  tone?: 'neutral' | 'success' | 'warning' | 'danger' | 'info';
 };
 
 type MetricTileProps = {
@@ -99,80 +101,93 @@ export function SecondaryButton({ label }: { label: string }) {
 
 const badgeToneStyles = StyleSheet.create({
   neutral: {
-    backgroundColor: '#f5f5f4',
-    borderColor: '#e7e5e4',
+    backgroundColor: D.surfaceMuted,
+    borderColor: D.border,
   },
   success: {
-    backgroundColor: '#ecfdf5',
-    borderColor: '#a7f3d0',
+    backgroundColor: D.trustSoft,
+    borderColor: D.trustBorder,
   },
   warning: {
-    backgroundColor: '#fffbeb',
-    borderColor: '#fde68a',
+    backgroundColor: D.warningSoft,
+    borderColor: D.warningBorder,
   },
   danger: {
-    backgroundColor: '#fff1f2',
-    borderColor: '#fecdd3',
+    backgroundColor: D.dangerSoft,
+    borderColor: D.dangerBorder,
+  },
+  info: {
+    backgroundColor: D.infoSoft,
+    borderColor: D.infoBorder,
   },
 });
 
 const badgeTextToneStyles = StyleSheet.create({
   neutral: {
-    color: '#57534e',
+    color: D.muted,
   },
   success: {
-    color: '#047857',
+    color: D.trustText,
   },
   warning: {
-    color: '#b45309',
+    color: D.warningText,
   },
   danger: {
-    color: '#be123c',
+    color: D.dangerText,
+  },
+  info: {
+    color: D.infoText,
   },
 });
 
 const styles = StyleSheet.create({
   safeArea: {
     flex: 1,
-    backgroundColor: '#f7f6f2',
+    backgroundColor: D.background,
   },
   content: {
-    paddingHorizontal: 20,
     paddingBottom: 28,
+    paddingHorizontal: 20,
     paddingTop: 12,
   },
   eyebrow: {
-    color: '#047857',
-    fontSize: 12,
-    fontWeight: '700',
-    letterSpacing: 1.2,
+    color: D.trust,
+    fontSize: 11,
+    fontWeight: '600',
+    letterSpacing: 1.4,
     marginBottom: 8,
     textTransform: 'uppercase',
   },
   title: {
-    color: '#1c1917',
-    fontSize: 34,
-    fontWeight: '700',
-    lineHeight: 40,
+    color: D.foreground,
+    fontSize: 32,
+    fontWeight: '600',
+    letterSpacing: -0.8,
+    lineHeight: 38,
   },
   stack: {
-    gap: 16,
-    marginTop: 22,
+    gap: 14,
+    marginTop: 20,
   },
   section: {
-    backgroundColor: '#ffffff',
-    borderColor: '#e7e5e4',
-    borderRadius: 8,
+    backgroundColor: D.surface,
+    borderColor: D.border,
+    borderRadius: D.radius,
     borderWidth: 1,
-    padding: 18,
+    padding: 16,
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 1 },
+    shadowOpacity: 0.03,
+    shadowRadius: 4,
   },
   sectionTitle: {
-    color: '#1c1917',
-    fontSize: 18,
-    fontWeight: '700',
+    color: D.foreground,
+    fontSize: 16,
+    fontWeight: '600',
+    letterSpacing: -0.3,
   },
   sectionBody: {
-    marginTop: 14,
+    marginTop: 12,
   },
   metricGrid: {
     flexDirection: 'row',
@@ -180,89 +195,94 @@ const styles = StyleSheet.create({
     gap: 10,
   },
   metricTile: {
-    backgroundColor: '#ffffff',
-    borderColor: '#e7e5e4',
-    borderRadius: 8,
+    backgroundColor: D.surface,
+    borderColor: D.border,
+    borderRadius: D.radiusSm,
     borderWidth: 1,
     minWidth: '47%',
-    padding: 16,
+    padding: 14,
   },
   metricLabel: {
-    color: '#78716c',
-    fontSize: 13,
-    fontWeight: '600',
+    color: D.subtle,
+    fontSize: 12,
+    fontWeight: '500',
   },
   metricValue: {
-    color: '#1c1917',
-    fontSize: 30,
-    fontWeight: '800',
-    marginTop: 8,
+    color: D.foreground,
+    fontSize: 28,
+    fontWeight: '600',
+    letterSpacing: -0.5,
+    marginTop: 6,
   },
   metricDetail: {
-    color: '#78716c',
-    fontSize: 13,
-    lineHeight: 18,
+    color: D.subtle,
+    fontSize: 12,
+    lineHeight: 17,
     marginTop: 4,
   },
   badge: {
     alignSelf: 'flex-start',
     borderRadius: 999,
     borderWidth: 1,
-    paddingHorizontal: 10,
-    paddingVertical: 5,
+    paddingHorizontal: 9,
+    paddingVertical: 4,
   },
   badgeText: {
-    fontSize: 12,
-    fontWeight: '700',
+    fontSize: 11,
+    fontWeight: '600',
+    letterSpacing: -0.1,
   },
   row: {
-    borderTopColor: '#e7e5e4',
+    borderTopColor: D.borderSubtle,
     borderTopWidth: 1,
     flexDirection: 'row',
     gap: 12,
     justifyContent: 'space-between',
-    paddingVertical: 14,
+    paddingVertical: 12,
   },
   rowText: {
     flex: 1,
-    gap: 4,
+    gap: 3,
   },
   rowTitle: {
-    color: '#1c1917',
-    fontSize: 15,
-    fontWeight: '700',
+    color: D.foreground,
+    fontSize: 14,
+    fontWeight: '600',
+    letterSpacing: -0.2,
   },
   rowDetail: {
-    color: '#78716c',
+    color: D.subtle,
     fontSize: 13,
     lineHeight: 18,
   },
   primaryButton: {
     alignItems: 'center',
-    backgroundColor: '#1c1917',
-    borderRadius: 8,
-    minHeight: 48,
+    backgroundColor: D.primary,
+    borderRadius: D.radiusSm,
     justifyContent: 'center',
+    minHeight: 44,
     paddingHorizontal: 16,
   },
   primaryButtonText: {
-    color: '#ffffff',
-    fontSize: 15,
-    fontWeight: '700',
+    color: D.primaryText,
+    fontSize: 14,
+    fontWeight: '500',
+    letterSpacing: -0.2,
   },
   secondaryButton: {
     alignItems: 'center',
-    backgroundColor: '#ffffff',
-    borderColor: '#d6d3d1',
-    borderRadius: 8,
+    backgroundColor: D.surface,
+    borderColor: D.border,
+    borderRadius: D.radiusSm,
     borderWidth: 1,
-    minHeight: 48,
     justifyContent: 'center',
+    minHeight: 44,
     paddingHorizontal: 16,
   },
   secondaryButtonText: {
-    color: '#44403c',
-    fontSize: 15,
-    fontWeight: '700',
+    color: D.muted,
+    fontSize: 14,
+    fontWeight: '500',
+    letterSpacing: -0.2,
   },
 });

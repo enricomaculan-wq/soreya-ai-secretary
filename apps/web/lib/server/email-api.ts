@@ -19,13 +19,28 @@ export function jsonError(error: unknown, status = 500) {
   );
 }
 
-export function readGmailOAuthConfig() {
+export function readGmailOAuthConfig(request?: Request) {
+  const redirectUri =
+    process.env.GOOGLE_GMAIL_REDIRECT_URI ??
+    process.env.GOOGLE_REDIRECT_URI ??
+    (request ? `${new URL(request.url).origin}/api/email/google/callback` : "http://localhost:3000/api/email/google/callback");
+
   return {
     clientId: optionalEnv("GOOGLE_GMAIL_CLIENT_ID", "GOOGLE_CLIENT_ID"),
     clientSecret: optionalEnv("GOOGLE_GMAIL_CLIENT_SECRET", "GOOGLE_CLIENT_SECRET"),
-    redirectUri: process.env.GOOGLE_GMAIL_REDIRECT_URI ?? "http://localhost:3000/api/email/google/callback",
+    redirectUri,
   };
 }
+
+export const GMAIL_OAUTH_SCOPES = [
+  "openid",
+  "email",
+  "profile",
+  "https://www.googleapis.com/auth/gmail.readonly",
+  "https://www.googleapis.com/auth/gmail.send",
+] as const;
+
+export const GMAIL_SEND_SCOPE = "https://www.googleapis.com/auth/gmail.send";
 
 export function readMicrosoftMailOAuthConfig() {
   return {

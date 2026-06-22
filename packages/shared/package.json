@@ -2,6 +2,18 @@
   "name": "@soreya/shared",
   "version": "0.1.0",
   "private": true,
+  "type": "module",
   "main": "index.ts",
-  "types": "index.ts"
+  "types": "index.ts",
+  "exports": {
+    ".": "./index.ts",
+    "./json": "./json.ts",
+    "./website-form": "./website-form.ts",
+    "./website-chat": "./website-chat.ts",
+    "./telegram": "./telegram.ts",
+    "./brain": "./brain.ts",
+    "./demo-playground": "./demo-playground.ts",
+    "./deep-links": "./deep-links.ts",
+    "./settings-channels": "./settings-channels.ts"
+  }
 }

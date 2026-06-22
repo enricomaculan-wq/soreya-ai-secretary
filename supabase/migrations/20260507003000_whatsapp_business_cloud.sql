@@ -26,9 +26,8 @@ on public.incoming_messages(organization_id, whatsapp_provider, received_at desc
 create index if not exists connected_accounts_org_provider_external_idx
 on public.connected_accounts(organization_id, provider, provider_account_id);
 
-create index if not exists suggested_actions_org_whatsapp_approval_idx
-on public.suggested_actions(organization_id, action_type, status, created_at desc)
-where action_type in ('send_whatsapp_reply', 'ask_whatsapp_more_info');
+-- Enum values above must commit before indexes referencing them (PostgreSQL 55P04).
+-- See 20260507003001_whatsapp_suggested_action_indexes.sql
 
 drop policy if exists "Members can insert incoming messages" on public.incoming_messages;
 create policy "Members can insert incoming messages"

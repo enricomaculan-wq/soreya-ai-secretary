@@ -31,7 +31,7 @@ const DEFAULT_SETTINGS: DailySummarySettings = {
   updatedAt: new Date().toISOString(),
 };
 
-export function DailySummaryPanel() {
+export function DailySummaryPanel({ marketing = false }: { marketing?: boolean }) {
   const { locale, t } = useI18n();
   const [summary, setSummary] = useState<DailySummary | null>(null);
   const [message, setMessage] = useState<string | null>(null);
@@ -143,12 +143,10 @@ export function DailySummaryPanel() {
   }
 
   return (
-    <div className="mt-5 space-y-5">
-      <p className="rounded-md border border-emerald-200 bg-emerald-50 p-3 text-sm text-emerald-800">
-        {t("safety.noAutomaticActions")}
-      </p>
+    <div className="space-y-5">
+      <p className="soreya-engine-note">{t("safety.noAutomaticActions")}</p>
 
-      {message ? (
+      {message && !marketing ? (
         <p className="rounded-md border border-stone-200 bg-stone-50 p-3 text-sm text-stone-700">{message}</p>
       ) : null}
 
@@ -171,9 +169,9 @@ export function DailySummaryPanel() {
             <Metric label={t("dailySummary.freeSlots")} value={summary.freeSlotsCount} detail={t("calendar.alternativeSlots")} />
           </div>
 
-          <div className="divide-y divide-stone-200 border-t border-stone-200">
+          <div className="border-t border-[var(--border-subtle)]">
             {[...summary.items, ...summary.recommendations].slice(0, 12).map((item) => (
-              <div key={item.id} className="py-4">
+              <div key={item.id} className="soreya-list-row">
                 <div className="flex flex-col gap-2 sm:flex-row sm:items-start sm:justify-between">
                   <div>
                     <p className="text-sm font-medium text-stone-950">{item.title}</p>
@@ -197,33 +195,35 @@ export function DailySummaryPanel() {
         />
       )}
 
-      <div className="flex flex-wrap gap-2">
-        <button
-          className="rounded-md bg-stone-950 px-3 py-2 text-sm font-medium text-white disabled:cursor-not-allowed disabled:bg-stone-400"
-          disabled={isGenerating}
-          onClick={generateSummary}
-          type="button"
-        >
-          {isGenerating ? `${t("common.loading")}...` : t("dailySummary.generateToday")}
-        </button>
-        <button
-          className="rounded-md border border-stone-300 bg-white px-3 py-2 text-sm font-medium text-stone-700 disabled:cursor-not-allowed disabled:bg-stone-100"
-          disabled={!summary}
-          onClick={markViewed}
-          type="button"
-        >
-          {t("dailySummary.markViewed")}
-        </button>
-        <a className="rounded-md border border-stone-300 bg-white px-3 py-2 text-sm font-medium text-stone-700" href="#approvals">
-          {t("navigation.approvals")}
-        </a>
-        <a className="rounded-md border border-stone-300 bg-white px-3 py-2 text-sm font-medium text-stone-700" href="#calendar">
-          {t("navigation.calendar")}
-        </a>
-        <a className="rounded-md border border-stone-300 bg-white px-3 py-2 text-sm font-medium text-stone-700" href="#emergency">
-          {t("emergency.mode")}
-        </a>
-      </div>
+      {!marketing ? (
+        <div className="flex flex-wrap gap-2">
+          <button
+            className="rounded-md bg-stone-950 px-3 py-2 text-sm font-medium text-white disabled:cursor-not-allowed disabled:bg-stone-400"
+            disabled={isGenerating}
+            onClick={generateSummary}
+            type="button"
+          >
+            {isGenerating ? `${t("common.loading")}...` : t("dailySummary.generateToday")}
+          </button>
+          <button
+            className="rounded-md border border-stone-300 bg-white px-3 py-2 text-sm font-medium text-stone-700 disabled:cursor-not-allowed disabled:bg-stone-100"
+            disabled={!summary}
+            onClick={markViewed}
+            type="button"
+          >
+            {t("dailySummary.markViewed")}
+          </button>
+          <a className="rounded-md border border-stone-300 bg-white px-3 py-2 text-sm font-medium text-stone-700" href="#approvals">
+            {t("navigation.approvals")}
+          </a>
+          <a className="rounded-md border border-stone-300 bg-white px-3 py-2 text-sm font-medium text-stone-700" href="#calendar">
+            {t("navigation.calendar")}
+          </a>
+          <a className="rounded-md border border-stone-300 bg-white px-3 py-2 text-sm font-medium text-stone-700" href="#emergency">
+            {t("emergency.mode")}
+          </a>
+        </div>
+      ) : null}
     </div>
   );
 }
@@ -377,10 +377,10 @@ function Toggle({
 
 function Metric({ detail, label, value }: { detail: string; label: string; value: number | string }) {
   return (
-    <div className="rounded-md border border-stone-200 bg-stone-50 p-3">
-      <p className="text-xs font-medium text-stone-500">{label}</p>
-      <p className="mt-1 text-xl font-semibold tracking-normal text-stone-950">{value}</p>
-      <p className="mt-1 text-xs text-stone-500">{detail}</p>
+    <div className="soreya-metric-tile">
+      <p className="text-[11px] font-medium uppercase tracking-[0.08em] text-[var(--ink-subtle)]">{label}</p>
+      <p className="mt-2 text-2xl font-semibold tracking-[-0.03em] text-[var(--foreground)]">{value}</p>
+      <p className="mt-1 text-[12px] text-[var(--ink-subtle)]">{detail}</p>
     </div>
   );
 }
@@ -397,7 +397,7 @@ function EmptyState({
   why?: string;
 }) {
   return (
-    <div className="mt-5 rounded-lg border border-stone-200 bg-stone-50 p-5">
+    <div className="mt-5 soreya-card-muted p-5">
       <p className="text-sm font-medium text-stone-950">{title}</p>
       <p className="mt-1 text-sm text-stone-500">{detail}</p>
       {why ? <p className="mt-3 text-sm leading-6 text-stone-600">{why}</p> : null}

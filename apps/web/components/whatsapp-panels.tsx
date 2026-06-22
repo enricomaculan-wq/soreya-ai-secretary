@@ -13,6 +13,8 @@ import { getWebDemoData, shouldUseWebDemoData } from "@/lib/demo-data";
 import { useI18n } from "@/lib/i18n";
 import { getSupabaseBrowserClient, hasSupabaseBrowserConfig } from "@/lib/supabase";
 import { syncSupabaseSessionToServer } from "@/lib/session";
+import { useAbsoluteAppUrl } from "@/lib/use-client-runtime";
+import { SettingsTechnicalDetails } from "@/components/settings/settings-technical-details";
 
 type WhatsAppStatusResponse = {
   connected?: boolean;
@@ -48,14 +50,14 @@ const INITIAL_FORM: WhatsAppConfigForm = {
   webhookVerifyToken: "",
 };
 
-export function WhatsAppBusinessPanel() {
+export function WhatsAppBusinessPanel({ compact = false }: { compact?: boolean } = {}) {
   const { locale, t, label } = useI18n();
   const [status, setStatus] = useState<WhatsAppStatusResponse | null>(null);
   const [form, setForm] = useState<WhatsAppConfigForm>(INITIAL_FORM);
   const [message, setMessage] = useState<string | null>(null);
   const [isLoading, setIsLoading] = useState(true);
   const [isSaving, setIsSaving] = useState(false);
-  const webhookUrl = "/api/whatsapp/webhook";
+  const webhookUrl = useAbsoluteAppUrl("/api/whatsapp/webhook");
 
   const loadStatus = useCallback(async () => {
     setMessage(null);
@@ -66,7 +68,7 @@ export function WhatsAppBusinessPanel() {
         connected: demoStatus.connected,
         displayPhoneNumber: demoStatus.displayPhoneNumber,
         phoneNumberId: "demo-phone-number-id",
-        verifiedName: "[DEMO] Soreya Local",
+        verifiedName: "Studio Verdi",
         status: demoStatus.status,
         lastSyncedAt: demoStatus.lastSyncedAt,
         lastSyncStatus: demoStatus.lastSyncStatus ?? undefined,
@@ -77,7 +79,7 @@ export function WhatsAppBusinessPanel() {
         businessAccountId: "demo-business-account",
         phoneNumberId: "demo-phone-number-id",
         displayPhoneNumber: demoStatus.displayPhoneNumber ?? "",
-        verifiedName: "[DEMO] Soreya Local",
+        verifiedName: "Studio Verdi",
       }));
       setMessage(t("demo.description"));
       setIsLoading(false);
@@ -156,7 +158,48 @@ export function WhatsAppBusinessPanel() {
 
   return (
     <div className="space-y-4">
-      <div className="rounded-lg border border-stone-200 bg-white p-5 shadow-sm">
+      {compact ? (
+        <>
+          <p className="text-sm text-stone-600">
+            {status?.connected
+              ? t("settings.hub.channels.whatsapp.connected", {
+                  number: status.displayPhoneNumber ?? status.phoneNumberId ?? "—",
+                })
+              : t("settings.hub.channels.whatsapp.disconnected")}
+          </p>
+          <SettingsTechnicalDetails>
+            <div className="soreya-card p-4 shadow-sm">
+              <div className="mt-1 space-y-1 text-sm text-stone-600">
+                <p>{t("common.status")}: {isLoading ? t("common.loading") : status?.status ?? t("common.notConnected")}</p>
+                <p>{t("whatsapp.phoneNumberId")}: {status?.phoneNumberId ?? "-"}</p>
+                <p>{t("whatsapp.displayPhone")}: {status?.displayPhoneNumber ?? "-"}</p>
+              </div>
+              <div className="mt-3 rounded-md border border-stone-200 bg-stone-50 p-3 text-sm text-stone-700">
+                <p className="font-medium text-stone-950">{t("whatsapp.webhookUrl")}</p>
+                <p className="mt-2 break-all font-mono text-xs">{webhookUrl}</p>
+              </div>
+            </div>
+            <div className="grid gap-3 md:grid-cols-2">
+              <TextInput label={t("whatsapp.businessAccountId")} value={form.businessAccountId} onChange={(value) => setFormValue("businessAccountId", value, setForm)} />
+              <TextInput label={t("whatsapp.phoneNumberId")} value={form.phoneNumberId} onChange={(value) => setFormValue("phoneNumberId", value, setForm)} />
+              <TextInput label={t("whatsapp.displayPhone")} value={form.displayPhoneNumber} onChange={(value) => setFormValue("displayPhoneNumber", value, setForm)} />
+              <TextInput label={t("whatsapp.verifiedName")} value={form.verifiedName} onChange={(value) => setFormValue("verifiedName", value, setForm)} />
+              <TextInput label={t("whatsapp.accessToken")} value={form.accessToken} onChange={(value) => setFormValue("accessToken", value, setForm)} type="password" />
+              <TextInput label={t("whatsapp.webhookVerifyToken")} value={form.webhookVerifyToken} onChange={(value) => setFormValue("webhookVerifyToken", value, setForm)} />
+            </div>
+          </SettingsTechnicalDetails>
+          <button
+            className="soreya-btn-primary px-4 py-2 text-sm disabled:cursor-not-allowed disabled:opacity-50"
+            disabled={isSaving}
+            onClick={saveConfiguration}
+            type="button"
+          >
+            {isSaving ? `${t("common.loading")}...` : t("settings.hub.channels.whatsapp.connect")}
+          </button>
+        </>
+      ) : (
+        <>
+      <div className="soreya-card p-5 shadow-sm">
         <div className="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
           <div>
             <h3 className="text-base font-semibold tracking-normal text-stone-950">{t("whatsapp.cloudApi")}</h3>
@@ -201,6 +244,8 @@ export function WhatsAppBusinessPanel() {
       {message ? (
         <p className="rounded-md border border-stone-200 bg-stone-50 p-3 text-sm text-stone-700">{message}</p>
       ) : null}
+        </>
+      )}
     </div>
   );
 }
@@ -543,7 +588,7 @@ function EmptyState({
   why?: string;
 }) {
   return (
-    <div className="mt-5 rounded-lg border border-stone-200 bg-stone-50 p-5">
+    <div className="mt-5 soreya-card-muted p-5">
       <p className="text-sm font-medium text-stone-950">{title}</p>
       <p className="mt-1 text-sm text-stone-500">{detail}</p>
       {why ? <p className="mt-3 text-sm leading-6 text-stone-600">{why}</p> : null}

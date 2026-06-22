@@ -190,15 +190,31 @@ export function buildCalendarConflict(
   requestedEnd: string,
 ): CalendarConflict {
   const conflictingEvents = detectCalendarConflicts(events, requestedStart, requestedEnd);
+  const requiredMinutes = rules.durationMinutes ?? Math.max(
+    DEFAULT_DURATION_MINUTES,
+    Math.round((new Date(requestedEnd).getTime() - new Date(requestedStart).getTime()) / minutes(1)),
+  );
+  const alternatives = conflictingEvents.length
+    ? suggestAlternativeSlots(events, rules, requestedStart, requestedEnd)
+    : [];
 
   return {
     requestedStartsAt: requestedStart,
     requestedEndsAt: requestedEnd,
     conflictingEvents,
-    alternatives: conflictingEvents.length
-      ? suggestAlternativeSlots(events, rules, requestedStart, requestedEnd)
-      : [],
+    alternatives: filterAvailabilitySlotsByRequiredDuration(alternatives, requiredMinutes),
   };
+}
+
+export function filterAvailabilitySlotsByRequiredDuration(
+  slots: AvailabilitySlot[],
+  requiredMinutes: number,
+): AvailabilitySlot[] {
+  if (requiredMinutes <= 0) {
+    return slots;
+  }
+
+  return slots.filter((slot) => slot.durationMinutes >= requiredMinutes);
 }
 
 function normalizeGoogleAttendees(value: unknown): CalendarAttendee[] {

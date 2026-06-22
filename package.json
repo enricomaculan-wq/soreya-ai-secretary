@@ -15,12 +15,17 @@
     "lint:web": "npm run lint --workspace apps/web",
     "lint:mobile": "npm run lint --workspace apps/mobile",
     "typecheck:mobile": "./node_modules/.bin/tsc --noEmit --project apps/mobile/tsconfig.json",
-    "verify": "npm run build --workspace apps/web && npm run lint --workspace apps/web && ./node_modules/.bin/tsc --noEmit --project apps/mobile/tsconfig.json && npm run lint --workspace apps/mobile",
+    "test": "node --experimental-strip-types --test packages/shared/deep-links.test.ts packages/shared/brain.test.ts packages/shared/settings-channels.test.ts packages/shared/website-form.test.ts packages/shared/website-chat.test.ts packages/shared/telegram.test.ts packages/ai/calendar-filter.test.ts apps/web/lib/demo-access.test.ts apps/web/lib/server/rate-limit-upstash.test.ts apps/web/lib/server/rate-limit-enabled.test.ts apps/web/lib/server/whatsapp-webhook.test.ts apps/web/lib/server/whatsapp-phone.test.ts apps/web/lib/server/telegram-webhook.test.ts apps/web/lib/server/telegram-chat-id.test.ts apps/web/lib/server/email-mime.test.ts apps/web/lib/server/calendar-event-draft.test.ts apps/web/lib/server/website-inbound-notifications.test.ts",
+    "verify": "npm run test && npm run build --workspace apps/web && npm run lint --workspace apps/web && ./node_modules/.bin/tsc --noEmit --project apps/mobile/tsconfig.json && npm run lint --workspace apps/mobile",
     "migrations:list": "ls -1 supabase/migrations",
+    "setup:brain": "node scripts/setup-brain.mjs",
+    "setup:supabase": "node scripts/apply-supabase-migrations.mjs",
+    "verify:supabase": "node scripts/verify-supabase-schema.mjs",
     "build": "npm run build:web"
   },
   "devDependencies": {
     "next": "16.2.5",
+    "pg": "^8.21.0",
     "react": "19.2.4",
     "react-dom": "19.2.4"
   }

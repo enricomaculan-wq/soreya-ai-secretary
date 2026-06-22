@@ -4,7 +4,7 @@ import { getDictionary, t as translate, type Dictionary } from "@soreya/shared";
 import { cookies } from "next/headers";
 
 const STATUS_CLASSES: Record<ProviderStatusState, string> = {
-  ready: "border-emerald-200 bg-emerald-50 text-emerald-700",
+  ready: "border-[var(--trust-border)] bg-[var(--trust-soft)] text-emerald-700",
   missing_env: "border-amber-200 bg-amber-50 text-amber-700",
   disabled: "border-stone-200 bg-stone-100 text-stone-600",
   dry_run: "border-sky-200 bg-sky-50 text-sky-700",
@@ -31,7 +31,7 @@ export async function SystemStatusPanel() {
   ];
 
   return (
-    <div className="rounded-lg border border-stone-200 bg-white p-5 shadow-sm">
+    <div className="soreya-card p-5 shadow-sm">
       <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
         <div>
           <h3 className="text-base font-semibold tracking-normal text-stone-950">{translate(dictionary, "systemStatus.title")}</h3>

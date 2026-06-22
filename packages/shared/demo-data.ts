@@ -22,6 +22,12 @@ import type {
   Uuid,
   WhatsAppConnectionStatus,
 } from "./index";
+import {
+  DEFAULT_ORGANIZATION_BRAIN_SETTINGS,
+  type OrganizationBrainContext,
+  type OrganizationService,
+} from "./brain";
+import { buildDemoScheduleCalendarEvents } from "./demo-calendar-schedule";
 import { resolveLocale, type SupportedLocale } from "./i18n";
 
 export const SOREYA_DEMO_ORGANIZATION_ID = "00000000-0000-4000-8000-000000000001";
@@ -83,7 +89,6 @@ export function getSoreyaDemoData(localeOrNow: SupportedLocale | Date = "it", ma
   const quickCallId = demoUuid("203");
   const calendarEventOneId = demoUuid("301");
   const calendarEventTwoId = demoUuid("302");
-  const calendarEventThreeId = demoUuid("303");
   const appointmentRequestEmailId = demoUuid("401");
   const appointmentRequestWhatsappId = demoUuid("402");
   const appointmentRequestCallId = demoUuid("403");
@@ -94,83 +99,23 @@ export function getSoreyaDemoData(localeOrNow: SupportedLocale | Date = "it", ma
   const actionEmergencyId = demoUuid("603");
   const actionCallId = demoUuid("604");
 
-  const calendarEvents: NormalizedCalendarEvent[] = [
-    {
-      id: calendarEventOneId,
-      organizationId,
-      provider: "google",
-      providerEventId: "demo-calendar-1",
-      calendarAccountId,
-      title: copy.calendarDentistTitle,
-      description: copy.calendarDentistDescription,
-      location: "Via Roma 12, Milano",
-      startsAt: atLocal(today, 9, 30).toISOString(),
-      endsAt: atLocal(today, 10, 15).toISOString(),
-      timezone: "Europe/Rome",
-      isAllDay: false,
-      attendees: [
-        {
-          email: "studio@example.test",
-          displayName: "Studio Rossi",
-          responseStatus: "accepted",
-        },
-      ],
-      status: "confirmed",
-      raw: demoMeta("calendar_event"),
-      createdAt,
-      updatedAt,
-    },
-    {
-      id: calendarEventTwoId,
-      organizationId,
-      provider: "google",
-      providerEventId: "demo-calendar-2",
-      calendarAccountId,
-      title: copy.calendarReviewTitle,
-      description: copy.calendarReviewDescription,
-      location: "Google Meet",
-      startsAt: atLocal(today, 14, 0).toISOString(),
-      endsAt: atLocal(today, 14, 45).toISOString(),
-      timezone: "Europe/Rome",
-      isAllDay: false,
-      attendees: [
-        {
-          email: "laura@example.test",
-          displayName: "Laura Bianchi",
-          responseStatus: "needsAction",
-        },
-      ],
-      status: "confirmed",
-      raw: demoMeta("calendar_event"),
-      createdAt,
-      updatedAt,
-    },
-    {
-      id: calendarEventThreeId,
-      organizationId,
-      provider: "google",
-      providerEventId: "demo-calendar-3",
-      calendarAccountId,
-      title: copy.calendarQuoteTitle,
-      description: copy.calendarQuoteDescription,
-      location: copy.customerLocation,
-      startsAt: atLocal(tomorrowKey, 16, 30).toISOString(),
-      endsAt: atLocal(tomorrowKey, 17, 15).toISOString(),
-      timezone: "Europe/Rome",
-      isAllDay: false,
-      attendees: [
-        {
-          email: null,
-          displayName: "Giulia Conti",
-          responseStatus: "tentative",
-        },
-      ],
-      status: "tentative",
-      raw: demoMeta("calendar_event"),
-      createdAt,
-      updatedAt,
-    },
-  ];
+  const calendarEvents = buildDemoScheduleCalendarEvents({
+    locale,
+    referenceDate: now,
+    organizationId,
+    calendarAccountId,
+    workdayCount: 10,
+  }).map((event, index) => {
+    if (index === 0) {
+      return { ...event, id: calendarEventOneId };
+    }
+
+    if (index === 1) {
+      return { ...event, id: calendarEventTwoId };
+    }
+
+    return event;
+  });
 
   const emailMessages: NormalizedEmailMessage[] = [
     {
@@ -246,6 +191,7 @@ export function getSoreyaDemoData(localeOrNow: SupportedLocale | Date = "it", ma
     {
       id: appointmentRequestEmailId,
       organization_id: organizationId,
+      service_id: null,
       incoming_message_id: emailMessageId,
       call_note_id: null,
       contact_id: null,
@@ -270,6 +216,7 @@ export function getSoreyaDemoData(localeOrNow: SupportedLocale | Date = "it", ma
     {
       id: appointmentRequestWhatsappId,
       organization_id: organizationId,
+      service_id: null,
       incoming_message_id: whatsappMessageId,
       call_note_id: null,
       contact_id: null,
@@ -294,6 +241,7 @@ export function getSoreyaDemoData(localeOrNow: SupportedLocale | Date = "it", ma
     {
       id: appointmentRequestCallId,
       organization_id: organizationId,
+      service_id: null,
       incoming_message_id: null,
       call_note_id: quickCallId,
       contact_id: null,
@@ -785,6 +733,70 @@ export function getSoreyaDemoData(localeOrNow: SupportedLocale | Date = "it", ma
   };
 }
 
+export function getDemoBrainContext(locale: SupportedLocale = "it"): OrganizationBrainContext {
+  const resolvedLocale = resolveLocale(locale);
+  const isItalian = resolvedLocale === "it";
+  const createdAt = "2026-06-03T10:00:00.000Z";
+  const services: OrganizationService[] = [
+    {
+      id: demoUuid("000000000101"),
+      organizationId: SOREYA_DEMO_ORGANIZATION_ID,
+      slug: "igiene",
+      name: isItalian ? "Igiene dentale" : "Dental hygiene",
+      durationMinutes: 45,
+      priceCents: 8000,
+      currency: "EUR",
+      isActive: true,
+      aliases: isItalian ? ["pulizia denti", "detartrasi", "igiene"] : ["teeth cleaning", "scaling", "hygiene"],
+      description: null,
+      sortOrder: 10,
+      createdAt,
+      updatedAt: createdAt,
+    },
+    {
+      id: demoUuid("000000000102"),
+      organizationId: SOREYA_DEMO_ORGANIZATION_ID,
+      slug: "visita",
+      name: isItalian ? "Visita di controllo" : "Check-up visit",
+      durationMinutes: 30,
+      priceCents: 5000,
+      currency: "EUR",
+      isActive: true,
+      aliases: isItalian ? ["controllo", "visita"] : ["check-up", "routine visit"],
+      description: null,
+      sortOrder: 20,
+      createdAt,
+      updatedAt: createdAt,
+    },
+    {
+      id: demoUuid("000000000103"),
+      organizationId: SOREYA_DEMO_ORGANIZATION_ID,
+      slug: "preventivo",
+      name: isItalian ? "Preventivo impianto" : "Implant quote",
+      durationMinutes: 60,
+      priceCents: null,
+      currency: "EUR",
+      isActive: true,
+      aliases: isItalian ? ["preventivo", "impianto"] : ["quote", "implant"],
+      description: null,
+      sortOrder: 30,
+      createdAt,
+      updatedAt: createdAt,
+    },
+  ];
+
+  return {
+    settings: {
+      ...DEFAULT_ORGANIZATION_BRAIN_SETTINGS,
+      reasoningMode: "proactive",
+      ownerStyleNotes: isItalian
+        ? "Saluta per nome, tono professionale ma caldo. Non promettere appuntamenti in giornata."
+        : "Greet by name, professional but warm tone. Do not promise same-day appointments.",
+    },
+    services,
+  };
+}
+
 function demoUuid(suffix: string): Uuid {
   return `00000000-0000-4000-8000-${suffix.padStart(12, "0")}` as Uuid;
 }
@@ -800,123 +812,123 @@ function demoMeta(source: string): Json {
 const demoCopy = {
   it: {
     safety: SOREYA_DEMO_COPY,
-    organizationName: "[DEMO] Area locale Soreya",
-    calendarDentistTitle: "[DEMO] Studio Verdi - controllo annuale",
-    calendarDentistDescription: "Evento demo generato localmente per verificare Soreya.",
-    calendarReviewTitle: "[DEMO] Revisione progetto con Laura",
+    organizationName: "Studio Verdi — Vicenza",
+    calendarDentistTitle: "Studio Verdi - controllo annuale",
+    calendarDentistDescription: "Appuntamento annuale in agenda.",
+    calendarReviewTitle: "Revisione progetto con Laura",
     calendarReviewDescription: "Definizione prossimi passi e coda approvazioni.",
-    calendarQuoteTitle: "[DEMO] Sopralluogo preventivo",
-    calendarQuoteDescription: "Richiesto dal messaggio WhatsApp demo.",
+    calendarQuoteTitle: "Sopralluogo preventivo",
+    calendarQuoteDescription: "Richiesto dal messaggio WhatsApp di Giulia.",
     customerLocation: "Cliente - Torino",
     customerLocationShort: "Cliente",
-    emailSubject: "[DEMO] Spostiamo il briefing?",
+    emailSubject: "Spostiamo il briefing?",
     emailSnippet: "Possiamo spostare il briefing a domani mattina verso le 11?",
     emailBody: "Ciao, possiamo spostare il briefing a domani mattina verso le 11? Va bene anche una call breve.",
-    whatsappBody: "[DEMO] Buongiorno, riuscite a fare un sopralluogo domani pomeriggio?",
+    whatsappBody: "Buongiorno, riuscite a fare un sopralluogo domani pomeriggio?",
     quickCallRawText:
-      "[DEMO] Telefonata con Mario Rossi: chiede richiamata venerdì alle 10 per confermare appuntamento e preventivo.",
+      "Telefonata con Mario Rossi: chiede richiamata venerdì alle 10 per confermare appuntamento e preventivo.",
     quickCallRequestedTime: "venerdì alle 10",
     quickCallReason: "Conferma richiamata e preventivo",
-    appointmentEmailTitle: "[DEMO] Briefing con Marta",
-    appointmentWhatsappTitle: "[DEMO] Sopralluogo Giulia",
-    appointmentCallTitle: "[DEMO] Richiamata Mario Rossi",
+    appointmentEmailTitle: "Briefing con Marta",
+    appointmentWhatsappTitle: "Sopralluogo Giulia",
+    appointmentCallTitle: "Richiamata Mario Rossi",
     videoCall: "Videochiamata",
     phone: "Telefono",
-    emergencyReason: "[DEMO] Sono in ritardo di 20 minuti",
+    emergencyReason: "Sono in ritardo di 20 minuti",
     emergencyProposalBody:
-      "[DEMO] Ciao Laura, potrei arrivare con circa 20 minuti di ritardo. Ti confermo qui prima di qualsiasi invio reale.",
-    actionEmailTitle: "[DEMO] Rispondi a Marta e blocca le 11:00",
+      "Ciao Laura, potrei arrivare con circa 20 minuti di ritardo. Ti confermo qui prima di qualsiasi invio.",
+    actionEmailTitle: "Rispondi a Marta e blocca le 11:00",
     actionEmailRationale: "La richiesta è chiara e non sono stati rilevati conflitti calendario.",
     actionEmailSubject: "Re: Spostiamo il briefing?",
     actionEmailBody:
       "Ciao Marta, domani alle 11:00 va bene. La tengo come bozza finale dopo l'approvazione in Soreya.",
-    actionWhatsappTitle: "[DEMO] Rispondi a Giulia su WhatsApp",
-    actionWhatsappRationale: "Soreya ha preparato una bozza breve, ma in demo non può inviare.",
+    actionWhatsappTitle: "Rispondi a Giulia su WhatsApp",
+    actionWhatsappRationale: "Soreya ha preparato una bozza breve pronta per la tua approvazione.",
     actionWhatsappBody:
       "Buongiorno Giulia, domani pomeriggio alle 16:30 può andare. La tengo pronta appena viene approvata in Soreya.",
-    actionEmergencyTitle: "[DEMO] Avvisa Laura del ritardo",
-    actionEmergencyRationale: "La modalità emergenza può solo preparare un'approvazione in attesa nella demo.",
-    actionCallTitle: "[DEMO] Prepara promemoria richiamata Mario",
+    actionEmergencyTitle: "Avvisa Laura del ritardo",
+    actionEmergencyRationale: "La modalità emergenza prepara una bozza in attesa di approvazione.",
+    actionCallTitle: "Prepara promemoria richiamata Mario",
     actionCallRationale: "La nota chiamata contiene dettagli sufficienti per preparare un promemoria.",
-    dailySummaryTitle: "[DEMO] Riepilogo giornaliero",
+    dailySummaryTitle: "Riepilogo giornaliero",
     dailySummaryHeadline: "3 appuntamenti, 4 approvazioni in attesa e 2 nuovi messaggi da rivedere.",
-    summaryFirstAppointmentTitle: "[DEMO] Primo appuntamento alle 09:30",
+    summaryFirstAppointmentTitle: "Primo appuntamento alle 09:30",
     reviewDay: "Rivedi giornata",
-    summaryApprovalsTitle: "[DEMO] 4 approvazioni richiedono una decisione",
-    summaryApprovalsDescription: "Sono tutte bozze e l'esecuzione resta bloccata.",
+    summaryApprovalsTitle: "4 approvazioni richiedono una decisione",
+    summaryApprovalsDescription: "Sono tutte bozze in attesa della tua conferma.",
     openApprovals: "Apri approvazioni",
-    summaryWhatsappTitle: "[DEMO] Richiesta appuntamento WhatsApp",
+    summaryWhatsappTitle: "Richiesta appuntamento WhatsApp",
     summaryWhatsappDescription: "Giulia chiede un sopralluogo domani pomeriggio.",
     reviewDraft: "Rivedi bozza",
-    summaryRecommendationTitle: "[DEMO] Approva solo dopo aver verificato i dettagli cliente",
-    summaryRecommendationDescription: "Le azioni demo sono anteprime sicure e non contattano provider.",
-    quickCallWarning: "Modalità demo: nessun promemoria calendario o messaggio esterno verrà creato.",
-    emergencyWarning: "Modalità demo: smartwatch e mobile preparano solo approvazioni.",
-    syncDuplicateWarning: "Payload webhook demo: un duplicato è stato saltato.",
-    mobileDeviceName: "[DEMO] iPhone simulatore locale",
-    watchDeviceName: "[DEMO] Apple Watch via notifiche telefono",
+    summaryRecommendationTitle: "Approva solo dopo aver verificato i dettagli cliente",
+    summaryRecommendationDescription: "Le bozze restano in attesa finché non le approvi tu.",
+    quickCallWarning: "Anteprima locale: nessun promemoria calendario o messaggio esterno verrà creato.",
+    emergencyWarning: "Anteprima locale: le scorciatoie preparano solo bozze in attesa.",
+    syncDuplicateWarning: "Un duplicato webhook è stato ignorato.",
+    mobileDeviceName: "iPhone di Enrico",
+    watchDeviceName: "Apple Watch",
     notificationStatus:
-      "Stato notifiche demo. Nessuna chiamata Expo push viene effettuata finché credenziali e flag reali non sono configurati.",
+      "Notifiche pronte. Nessun messaggio viene inviato finché non approvi la bozza.",
   },
   en: {
     safety: SOREYA_DEMO_COPY_EN,
-    organizationName: "[DEMO] Soreya Local Workspace",
-    calendarDentistTitle: "[DEMO] Studio Verdi - annual checkup",
-    calendarDentistDescription: "Demo event generated locally to verify Soreya.",
-    calendarReviewTitle: "[DEMO] Project review with Laura",
+    organizationName: "Studio Verdi — Vicenza",
+    calendarDentistTitle: "Studio Verdi - annual checkup",
+    calendarDentistDescription: "Annual appointment on the calendar.",
+    calendarReviewTitle: "Project review with Laura",
     calendarReviewDescription: "Discuss next steps and the approval queue.",
-    calendarQuoteTitle: "[DEMO] Quote site visit",
-    calendarQuoteDescription: "Requested by the demo WhatsApp message.",
+    calendarQuoteTitle: "Quote site visit",
+    calendarQuoteDescription: "Requested by Giulia's WhatsApp message.",
     customerLocation: "Customer - Turin",
     customerLocationShort: "Customer",
-    emailSubject: "[DEMO] Can we move the briefing?",
+    emailSubject: "Can we move the briefing?",
     emailSnippet: "Can we move the briefing to tomorrow morning around 11?",
     emailBody: "Hi, can we move the briefing to tomorrow morning around 11? A short call also works.",
-    whatsappBody: "[DEMO] Good morning, can you do a site visit tomorrow afternoon?",
+    whatsappBody: "Good morning, can you do a site visit tomorrow afternoon?",
     quickCallRawText:
-      "[DEMO] Call with Mario Rossi: he asks for a callback Friday at 10 to confirm the appointment and quote.",
+      "Call with Mario Rossi: he asks for a callback Friday at 10 to confirm the appointment and quote.",
     quickCallRequestedTime: "Friday at 10",
     quickCallReason: "Callback and quote confirmation",
-    appointmentEmailTitle: "[DEMO] Briefing with Marta",
-    appointmentWhatsappTitle: "[DEMO] Site visit for Giulia",
-    appointmentCallTitle: "[DEMO] Callback for Mario Rossi",
+    appointmentEmailTitle: "Briefing with Marta",
+    appointmentWhatsappTitle: "Site visit for Giulia",
+    appointmentCallTitle: "Callback for Mario Rossi",
     videoCall: "Video call",
     phone: "Phone",
-    emergencyReason: "[DEMO] I am running 20 minutes late",
+    emergencyReason: "I am running 20 minutes late",
     emergencyProposalBody:
-      "[DEMO] Hi Laura, I may be about 20 minutes late. I will confirm here before any real message is sent.",
-    actionEmailTitle: "[DEMO] Reply to Marta and hold 11:00",
+      "Hi Laura, I may be about 20 minutes late. I will confirm here before any real message is sent.",
+    actionEmailTitle: "Reply to Marta and hold 11:00",
     actionEmailRationale: "The request is clear and no calendar conflict was detected.",
     actionEmailSubject: "Re: Can we move the briefing?",
     actionEmailBody:
       "Hi Marta, tomorrow at 11:00 works. I’ll keep this as the final draft after approval in Soreya.",
-    actionWhatsappTitle: "[DEMO] Reply to Giulia on WhatsApp",
-    actionWhatsappRationale: "Soreya prepared a short draft, but demo mode cannot send it.",
+    actionWhatsappTitle: "Reply to Giulia on WhatsApp",
+    actionWhatsappRationale: "Soreya prepared a short draft ready for your approval.",
     actionWhatsappBody:
       "Good morning Giulia, tomorrow afternoon at 16:30 works. I’ll keep it ready after approval in Soreya.",
-    actionEmergencyTitle: "[DEMO] Notify Laura about the delay",
-    actionEmergencyRationale: "Emergency Mode can only prepare a pending approval in the demo.",
-    actionCallTitle: "[DEMO] Prepare Mario callback reminder",
+    actionEmergencyTitle: "Notify Laura about the delay",
+    actionEmergencyRationale: "Emergency mode prepares a draft waiting for approval.",
+    actionCallTitle: "Prepare Mario callback reminder",
     actionCallRationale: "The call note has enough detail to prepare a reminder.",
-    dailySummaryTitle: "[DEMO] Daily Summary",
+    dailySummaryTitle: "Daily Summary",
     dailySummaryHeadline: "3 appointments, 4 approvals waiting, and 2 new messages need review.",
-    summaryFirstAppointmentTitle: "[DEMO] First appointment at 09:30",
+    summaryFirstAppointmentTitle: "First appointment at 09:30",
     reviewDay: "Review day",
-    summaryApprovalsTitle: "[DEMO] 4 approvals need a decision",
-    summaryApprovalsDescription: "All are drafts and remain blocked from execution.",
+    summaryApprovalsTitle: "4 approvals need a decision",
+    summaryApprovalsDescription: "All are drafts waiting for your confirmation.",
     openApprovals: "Open approvals",
-    summaryWhatsappTitle: "[DEMO] WhatsApp appointment request",
+    summaryWhatsappTitle: "WhatsApp appointment request",
     summaryWhatsappDescription: "Giulia asked for a site visit tomorrow afternoon.",
     reviewDraft: "Review draft",
-    summaryRecommendationTitle: "[DEMO] Approve only after checking customer details",
-    summaryRecommendationDescription: "Demo actions are safe previews and never contact providers.",
-    quickCallWarning: "Demo mode: no calendar reminder or external message will be created.",
-    emergencyWarning: "Demo mode: smartwatch and mobile emergency shortcuts only prepare approvals.",
-    syncDuplicateWarning: "Demo webhook payload skipped one duplicate.",
-    mobileDeviceName: "[DEMO] iPhone local simulator",
-    watchDeviceName: "[DEMO] Apple Watch via phone notifications",
+    summaryRecommendationTitle: "Approve only after checking customer details",
+    summaryRecommendationDescription: "Drafts stay pending until you approve them.",
+    quickCallWarning: "Local preview: no calendar reminder or external message will be created.",
+    emergencyWarning: "Local preview: shortcuts only prepare pending drafts.",
+    syncDuplicateWarning: "One duplicate webhook payload was skipped.",
+    mobileDeviceName: "Enrico's iPhone",
+    watchDeviceName: "Apple Watch",
     notificationStatus:
-      "Demo notification status. No Expo push call is made until real credentials and push flags are configured.",
+      "Notifications ready. No message is sent until you approve the draft.",
   },
 } as const satisfies Record<SupportedLocale, Record<string, string>>;
 

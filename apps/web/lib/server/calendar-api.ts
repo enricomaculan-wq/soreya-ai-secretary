@@ -19,13 +19,27 @@ export function jsonError(error: unknown, status = 500) {
   );
 }
 
-export function readGoogleOAuthConfig() {
+export function readGoogleOAuthConfig(request?: Request) {
+  const redirectUri =
+    process.env.GOOGLE_REDIRECT_URI ??
+    (request ? `${new URL(request.url).origin}/api/calendar/google/callback` : "http://localhost:3000/api/calendar/google/callback");
+
   return {
     clientId: requiredEnv("GOOGLE_CLIENT_ID"),
     clientSecret: requiredEnv("GOOGLE_CLIENT_SECRET"),
-    redirectUri: process.env.GOOGLE_REDIRECT_URI ?? "http://localhost:3000/api/calendar/google/callback",
+    redirectUri,
   };
 }
+
+export const GOOGLE_CALENDAR_OAUTH_SCOPES = [
+  "openid",
+  "email",
+  "profile",
+  "https://www.googleapis.com/auth/calendar.events.readonly",
+  "https://www.googleapis.com/auth/calendar.events",
+] as const;
+
+export const GOOGLE_CALENDAR_EVENTS_SCOPE = "https://www.googleapis.com/auth/calendar.events";
 
 export function readMicrosoftOAuthConfig() {
   return {

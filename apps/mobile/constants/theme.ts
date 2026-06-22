@@ -1,41 +1,31 @@
-/**
- * Below are the colors that are used in the app. The colors are defined in the light and dark mode.
- * There are many other ways to style your app. For example, [Nativewind](https://www.nativewind.dev/), [Tamagui](https://tamagui.dev/), [unistyles](https://reactnativeunistyles.vercel.app), etc.
- */
-
 import { Platform } from 'react-native';
 
-const tintColorLight = '#047857';
-const tintColorDark = '#a7f3d0';
+import { SoreyaDesign as D } from '@/constants/design';
 
 export const Colors = {
   light: {
-    text: '#1c1917',
-    background: '#f7f6f2',
-    tint: tintColorLight,
-    icon: '#687076',
-    tabIconDefault: '#687076',
-    tabIconSelected: tintColorLight,
+    text: D.foreground,
+    background: D.background,
+    tint: D.trust,
+    icon: D.subtle,
+    tabIconDefault: D.subtle,
+    tabIconSelected: D.trust,
   },
   dark: {
-    text: '#f5f5f4',
-    background: '#1c1917',
-    tint: tintColorDark,
+    text: '#f5f5f5',
+    background: D.heroDark,
+    tint: D.heroAccent,
     icon: '#9BA1A6',
     tabIconDefault: '#9BA1A6',
-    tabIconSelected: tintColorDark,
+    tabIconSelected: D.heroAccent,
   },
 };
 
 export const Fonts = Platform.select({
   ios: {
-    /** iOS `UIFontDescriptorSystemDesignDefault` */
     sans: 'system-ui',
-    /** iOS `UIFontDescriptorSystemDesignSerif` */
     serif: 'ui-serif',
-    /** iOS `UIFontDescriptorSystemDesignRounded` */
     rounded: 'ui-rounded',
-    /** iOS `UIFontDescriptorSystemDesignMonospaced` */
     mono: 'ui-monospace',
   },
   default: {
