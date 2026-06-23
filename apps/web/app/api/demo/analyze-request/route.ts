@@ -6,7 +6,7 @@ import type {
   SuggestedActionType,
   SupportedLocale,
 } from "@soreya/shared";
-import { resolveLocale, resolveDemoPatientFirstName, detectDemoAppointmentConfirmationFollowUp, describeDemoScheduleFacts, findDemoFreeSlots, isDemoSlotBusy, detectDemoCustomerGreeting, formatDemoStudioGreeting } from "@soreya/shared";
+import { resolveLocale, resolveDemoPatientFirstName, detectDemoAppointmentConfirmationFollowUp, detectDemoAppointmentAmbiguousConfirmationFollowUp, describeDemoScheduleFacts, findDemoFreeSlots, isDemoSlotBusy, detectDemoCustomerGreeting, formatDemoStudioGreeting, extractDemoOfferedTimeHints, buildDemoOfferedTimeClarificationReply } from "@soreya/shared";
 import { z } from "zod";
 
 import {
@@ -751,6 +751,81 @@ function buildAppointmentConfirmationSuggestedReply(
     : `Perfetto, confermo per ${confirmedSlotLabel}. A presto!`;
 }
 
+function buildAppointmentTimeClarificationAnalysis(
+  input: z.infer<typeof requestSchema>,
+  followUp: NonNullable<ReturnType<typeof detectDemoAppointmentAmbiguousConfirmationFollowUp>>,
+): DemoAnalyzeResponse {
+  const locale = resolveLocale(input.locale);
+  const sender = resolveSenderIdentity(
+    input.channel,
+    input.senderText,
+    followUp.originalRequestText,
+    locale,
+  );
+  const reason = detectAppointmentReason(followUp.originalRequestText, locale);
+  const calendar = resolveDemoCalendar(followUp.originalRequestText, "new_appointment", locale, reason);
+  const offeredTimes = extractDemoOfferedTimeHints(followUp.lastStudioReply);
+  const firstName = getReplyFirstName(sender);
+  const suggestedReply = buildDemoOfferedTimeClarificationReply(offeredTimes, firstName, locale);
+  const summary =
+    locale === "it"
+      ? "Il paziente ha confermato senza indicare l'orario: serve chiedere quale slot preferisce."
+      : "The patient confirmed without choosing a time: ask which slot they prefer.";
+
+  return {
+    channel: input.channel,
+    senderText: sender.senderText,
+    customerText: input.customerText,
+    locale,
+    detectedIntent: "new_appointment",
+    isAppointmentRequest: true,
+    confidence: 0.94,
+    customerName: sender.customerIdentified ? sender.contact?.name ?? sender.senderName : null,
+    senderName: sender.senderName,
+    senderContact: sender.senderContact,
+    senderSource: input.channel,
+    customerIdentified: sender.customerIdentified,
+    appointmentContextType: "new_appointment",
+    matchedAppointment: matchAppointment(sender, followUp.originalRequestText, "new_appointment", locale),
+    summary,
+    appointmentRequests: [],
+    hasMultipleRequests: false,
+    primaryRequestSummary: "",
+    linkedAppointments: [],
+    hasLinkedAppointments: false,
+    cancellationScope: null,
+    isThirdPartyRequest: false,
+    referredPersonName: null,
+    referredPersonPhone: null,
+    referredByName: null,
+    referredByContact: null,
+    urgency: "normal",
+    contactActionType: null,
+    requestedDateTimeText: calendar.requestedDateTimeText,
+    requestedNewDateText: null,
+    proposedMoveToText: null,
+    requestedStartsAt: calendar.requestedStartsAt,
+    requestedEndsAt: calendar.requestedEndsAt,
+    reason,
+    needsCalendarCheck: true,
+    conflictDetected: false,
+    alternatives: calendar.alternatives,
+    suggestedReply,
+    needsMoreInfo: true,
+    needsClarification: true,
+    clarificationQuestion: suggestedReply,
+    missingFields: locale === "it" ? ["orario preferito"] : ["preferred time"],
+    recommendedNextStep: "ask_clarification",
+    requiresOperatorAttention: false,
+    operatorAttentionCategory: null,
+    safetyNotes: buildSafetyNotes(locale),
+    demoSuggestedAction: selectSuggestedAction(input.channel, "new_appointment", true),
+    aiProvider: "heuristic",
+    aiModel: readOpenAIConfig().model,
+    usedFallback: true,
+  };
+}
+
 function buildAppointmentConfirmationAnalysis(
   input: z.infer<typeof requestSchema>,
   confirmationFollowUp: NonNullable<ReturnType<typeof detectDemoAppointmentConfirmationFollowUp>>,
@@ -834,6 +909,15 @@ function buildAppointmentConfirmationAnalysis(
 }
 
 function buildFallbackAnalysis(input: z.infer<typeof requestSchema>): DemoAnalyzeResponse {
+  const ambiguousFollowUp = detectDemoAppointmentAmbiguousConfirmationFollowUp(
+    input.conversationHistory ?? [],
+    input.customerText,
+  );
+
+  if (ambiguousFollowUp) {
+    return buildAppointmentTimeClarificationAnalysis(input, ambiguousFollowUp);
+  }
+
   const confirmationFollowUp = detectDemoAppointmentConfirmationFollowUp(
     input.conversationHistory ?? [],
     input.customerText,

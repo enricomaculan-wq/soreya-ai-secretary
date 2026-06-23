@@ -1303,6 +1303,63 @@ export function isDemoNewRequestFollowUpText(text: string) {
   return DEMO_NEW_REQUEST_FOLLOW_UP_PATTERNS.some((pattern) => pattern.test(normalized));
 }
 
+export function extractDemoOfferedTimeHints(studioReply: string): string[] {
+  const matches = studioReply.match(/\b\d{1,2}[:.]\d{2}\b/g) ?? [];
+  const normalized = matches.map((time) => time.replace(".", ":"));
+
+  return [...new Set(normalized)];
+}
+
+export function isDemoAmbiguousAppointmentConfirmation(latestMessage: string, studioReply: string) {
+  if (!isDemoPatientConfirmationText(latestMessage)) {
+    return false;
+  }
+
+  if (extractDemoConfirmedTimeHint(latestMessage, studioReply)) {
+    return false;
+  }
+
+  return extractDemoOfferedTimeHints(studioReply).length > 1;
+}
+
+export function buildDemoOfferedTimeClarificationReply(
+  offeredTimes: string[],
+  firstName: string | null,
+  locale: SupportedLocale | string,
+): string {
+  const isItalian = resolveLocale(locale) === "it";
+
+  if (offeredTimes.length < 2) {
+    return firstName
+      ? isItalian
+        ? `Perfetto ${firstName}! Quale orario preferisce?`
+        : `Perfect ${firstName}! Which time works best for you?`
+      : isItalian
+        ? "Perfetto! Quale orario preferisce?"
+        : "Perfect! Which time works best for you?";
+  }
+
+  const formattedTimes = offeredTimes.map((time) => (isItalian ? `le ${time}` : time));
+  const list =
+    formattedTimes.length === 2
+      ? isItalian
+        ? `${formattedTimes[0]} o ${formattedTimes[1]}`
+        : `${formattedTimes[0]} or ${formattedTimes[1]}`
+      : isItalian
+        ? `${formattedTimes.slice(0, -1).join(", ")} o ${formattedTimes[formattedTimes.length - 1]}`
+        : `${formattedTimes.slice(0, -1).join(", ")}, or ${formattedTimes[formattedTimes.length - 1]}`;
+
+  if (isItalian) {
+    return firstName
+      ? `Perfetto ${firstName}! Quale orario preferisce tra ${list}?`
+      : `Perfetto! Quale orario preferisce tra ${list}?`;
+  }
+
+  return firstName
+    ? `Perfect ${firstName}! Which time works best for you, ${list}?`
+    : `Perfect! Which time works best for you, ${list}?`;
+}
+
 export function extractDemoConfirmedTimeHint(latestMessage: string, studioReply: string) {
   const normalized = latestMessage.trim();
 
@@ -1324,6 +1381,40 @@ export function extractDemoConfirmedTimeHint(latestMessage: string, studioReply:
   }
 
   return null;
+}
+
+export function detectDemoAppointmentAmbiguousConfirmationFollowUp(
+  history: Array<{ role: "customer" | "studio"; body: string }>,
+  latestMessage: string,
+): DemoAppointmentConfirmationFollowUp | null {
+  const latest = latestMessage.trim();
+  if (!latest || history.length === 0) {
+    return null;
+  }
+
+  const lastStudio = [...history].reverse().find((entry) => entry.role === "studio");
+  if (!lastStudio) {
+    return null;
+  }
+
+  const studioOfferedScheduling =
+    /(disponibilit|quale orario|which (one|time)|preferisc|preferisce|proporr|first available|prima disponibilit|ho controllato l.?agenda|i checked the calendar)/i.test(
+      lastStudio.body,
+    );
+  if (!studioOfferedScheduling) {
+    return null;
+  }
+
+  if (!isDemoAmbiguousAppointmentConfirmation(latest, lastStudio.body)) {
+    return null;
+  }
+
+  const firstCustomer = history.find((entry) => entry.role === "customer")?.body ?? latest;
+  return {
+    originalRequestText: firstCustomer,
+    confirmedTimeHint: null,
+    lastStudioReply: lastStudio.body,
+  };
 }
 
 export function detectDemoAppointmentConfirmationFollowUp(
@@ -1349,6 +1440,10 @@ export function detectDemoAppointmentConfirmationFollowUp(
   }
 
   if (!isDemoPatientConfirmationText(latest)) {
+    return null;
+  }
+
+  if (isDemoAmbiguousAppointmentConfirmation(latest, lastStudio.body)) {
     return null;
   }
 

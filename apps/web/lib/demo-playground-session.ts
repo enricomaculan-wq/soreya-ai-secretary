@@ -202,14 +202,22 @@ export function useDemoPlaygroundSession(locale: SupportedLocale) {
           [...messages].reverse().find((message) => message.role === "studio" && message.status === "sent")?.body ??
           replyBody;
         const isConfirmation =
-          isDemoPatientConfirmationText(lastCustomerBody) && pendingGroup.length > 0;
+          isDemoPatientConfirmationText(lastCustomerBody) &&
+          pendingGroup.length > 0 &&
+          (pendingGroup.length === 1 ||
+            Boolean(extractDemoConfirmedTimeHint(lastCustomerBody, lastStudioReply)));
 
         let nextEvents = current.calendarEvents;
         let nextPendingIds = [...current.pendingConfirmationEventIds];
         let nextHighlightedIds = [...current.highlightedEventIds];
 
         if (isConfirmation && pendingGroup.length > 0) {
-          const confirmedEvent = resolveConfirmedPendingEvent(pendingGroup, lastCustomerBody, lastStudioReply);
+          const confirmedEvent = resolveConfirmedPendingEvent(
+            pendingGroup,
+            lastCustomerBody,
+            lastStudioReply,
+          );
+          if (confirmedEvent) {
           const releasedIds = new Set(
             pendingGroup.filter((event) => event.id !== confirmedEvent.id).map((event) => event.id),
           );
@@ -221,6 +229,7 @@ export function useDemoPlaygroundSession(locale: SupportedLocale) {
             );
           nextPendingIds = nextPendingIds.filter((id) => !pendingGroup.some((event) => event.id === id));
           nextHighlightedIds = [confirmedEvent.id, ...nextHighlightedIds.filter((id) => id !== confirmedEvent.id)];
+          }
         } else if (proposedEvents.length > 0) {
           const existingProposalEvents = findExistingProposalEvents(current.calendarEvents, proposedEvents);
 
@@ -488,6 +497,10 @@ function resolveConfirmedPendingEvent(
   studioReply: string,
 ) {
   const timeHint = extractDemoConfirmedTimeHint(customerBody, studioReply);
+
+  if (!timeHint && pendingEvents.length > 1) {
+    return null;
+  }
 
   if (timeHint) {
     const parts = timeHint.replace(".", ":").split(":");
