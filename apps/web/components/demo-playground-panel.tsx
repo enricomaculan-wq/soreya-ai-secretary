@@ -138,6 +138,7 @@ export function DemoPlaygroundPanel({
         holdProposalSlots(
           cached,
           resolveDemoPatientFirstName(cached.senderName, cached.customerName),
+          cached.suggestedReply,
         );
       }
       return;
@@ -186,6 +187,7 @@ export function DemoPlaygroundPanel({
         holdProposalSlots(
           body,
           resolveDemoPatientFirstName(body.senderName, body.customerName),
+          body.suggestedReply,
         );
       }
       const needsOperatorAttention = Boolean(body.requiresOperatorAttention);

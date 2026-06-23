@@ -210,7 +210,7 @@ export function findDemoFreeSlots(
   const maxSlots = options.maxSlots ?? 2;
   const busy = getBusyIntervalsForDay(targetDay);
 
-  const candidates = DEMO_SLOT_CANDIDATES.filter((candidate) => {
+  const freeCandidates = DEMO_SLOT_CANDIDATES.filter((candidate) => {
     if (options.preferMorning && candidate.hour >= 13) {
       return false;
     }
@@ -224,7 +224,7 @@ export function findDemoFreeSlots(
     return !busy.some((interval) => intervalsOverlap(startsAt, endsAt, interval.startsAt, interval.endsAt));
   });
 
-  return candidates.slice(0, maxSlots).map((candidate) => {
+  const toSlot = (candidate: { hour: number; minute: number }) => {
     const startsAt = atLocalOnDay(targetDay, candidate.hour, candidate.minute);
     return {
       startsAt: startsAt.toISOString(),
@@ -233,7 +233,18 @@ export function findDemoFreeSlots(
       provider: "google" as const,
       calendarAccountId: null,
     } satisfies AvailabilitySlot;
-  });
+  };
+
+  if (maxSlots >= 2 && !options.preferMorning && !options.preferAfternoon) {
+    const morning = freeCandidates.find((candidate) => candidate.hour < 13);
+    const afternoon = freeCandidates.find((candidate) => candidate.hour >= 14);
+
+    if (morning && afternoon) {
+      return [morning, afternoon].slice(0, maxSlots).map((candidate) => toSlot(candidate));
+    }
+  }
+
+  return freeCandidates.slice(0, maxSlots).map((candidate) => toSlot(candidate));
 }
 
 function titleForBlock(block: DemoBusyBlock, locale: SupportedLocale) {

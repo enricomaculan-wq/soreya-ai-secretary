@@ -2,9 +2,11 @@
 
 import {
   extractDemoConfirmedTimeHint,
+  extractDemoOfferedTimeHints,
   getSoreyaDemoData,
   isDemoPatientConfirmationText,
   resolveDemoPatientFirstName,
+  type AvailabilitySlot,
   type DemoCustomerRequestAnalysis,
   type Json,
   type NormalizedCalendarEvent,
@@ -162,8 +164,14 @@ export function useDemoPlaygroundSession(locale: SupportedLocale) {
   );
 
   const holdProposalSlots = useCallback(
-    (analysis: DemoCustomerRequestAnalysis, patientName: string | null) => {
-      updateSession((current) => applyProposalSlotsToSession(current, analysis, patientName, locale));
+    (
+      analysis: DemoCustomerRequestAnalysis,
+      patientName: string | null,
+      proposalReply?: string | null,
+    ) => {
+      updateSession((current) =>
+        applyProposalSlotsToSession(current, analysis, patientName, locale, proposalReply),
+      );
     },
     [locale, updateSession],
   );
@@ -174,7 +182,12 @@ export function useDemoPlaygroundSession(locale: SupportedLocale) {
 
   const approveDraft = useCallback(
     (analysis: DemoCustomerRequestAnalysis, replyBody: string, patientName: string | null) => {
-      const proposedEvents = buildCalendarEventsFromAnalysis(analysis, patientName, locale);
+      const proposedEvents = buildCalendarEventsFromAnalysis(
+        analysis,
+        patientName,
+        locale,
+        replyBody,
+      );
 
       updateSession((current) => {
         const messages = current.messages.some((message) => message.status === "draft")
@@ -231,9 +244,10 @@ export function useDemoPlaygroundSession(locale: SupportedLocale) {
           nextHighlightedIds = [confirmedEvent.id, ...nextHighlightedIds.filter((id) => id !== confirmedEvent.id)];
           }
         } else if (proposedEvents.length > 0) {
-          const existingProposalEvents = findExistingProposalEvents(current.calendarEvents, proposedEvents);
+          const existingPending = current.calendarEvents.filter(isDemoPlaygroundPendingEvent);
 
-          if (!haveSameProposalSlots(existingProposalEvents, proposedEvents)) {
+          if (!haveSameProposalSlots(existingPending, proposedEvents)) {
+            const removedPendingIds = new Set(existingPending.map((event) => event.id));
             const withoutOldProposals = current.calendarEvents.filter(
               (event) => !isDemoPlaygroundPendingEvent(event),
             );
@@ -242,7 +256,7 @@ export function useDemoPlaygroundSession(locale: SupportedLocale) {
             );
             nextPendingIds = [
               ...proposedEvents.map((event) => event.id),
-              ...nextPendingIds.filter((id) => !proposedEvents.some((event) => event.id === id)),
+              ...nextPendingIds.filter((id) => !removedPendingIds.has(id)),
             ];
           }
         }
@@ -294,12 +308,13 @@ export function buildCalendarEventsFromAnalysis(
   analysis: DemoCustomerRequestAnalysis,
   patientName: string | null,
   locale: SupportedLocale,
+  proposalReply?: string | null,
 ): NormalizedCalendarEvent[] {
   if (analysis.detectedIntent !== "new_appointment" && analysis.detectedIntent !== "reschedule_appointment") {
     return [];
   }
 
-  const slots = dedupeAlternativesByStart(analysis.alternatives).slice(0, 2);
+  const slots = resolveProposalSlotsForCalendar(analysis, proposalReply);
   if (slots.length === 0) {
     return [];
   }
@@ -352,8 +367,41 @@ export function buildCalendarEventFromAnalysis(
   analysis: DemoCustomerRequestAnalysis,
   patientName: string | null,
   locale: SupportedLocale,
+  proposalReply?: string | null,
 ): NormalizedCalendarEvent | null {
-  return buildCalendarEventsFromAnalysis(analysis, patientName, locale)[0] ?? null;
+  return buildCalendarEventsFromAnalysis(analysis, patientName, locale, proposalReply)[0] ?? null;
+}
+
+function resolveProposalSlotsForCalendar(
+  analysis: DemoCustomerRequestAnalysis,
+  proposalReply?: string | null,
+): AvailabilitySlot[] {
+  const fromAlternatives = dedupeAlternativesByStart(analysis.alternatives);
+  const durationMinutes =
+    fromAlternatives.find((slot) => slot.durationMinutes > 0)?.durationMinutes ?? 45;
+  const replyTimes = proposalReply ? extractDemoOfferedTimeHints(proposalReply) : [];
+  const anchor = fromAlternatives[0]?.startsAt ?? analysis.requestedStartsAt;
+
+  if (replyTimes.length >= 2 && anchor) {
+    const anchorDate = new Date(anchor);
+    const replySlots = replyTimes.slice(0, 2).map((time) => {
+      const [hours, minutes] = time.split(":").map((part) => Number(part));
+      const startsAt = new Date(anchorDate);
+      startsAt.setHours(hours, minutes, 0, 0);
+
+      return {
+        startsAt: startsAt.toISOString(),
+        endsAt: new Date(startsAt.getTime() + durationMinutes * 60_000).toISOString(),
+        durationMinutes,
+        provider: "google" as const,
+        calendarAccountId: null,
+      } satisfies AvailabilitySlot;
+    });
+
+    return dedupeAlternativesByStart(replySlots).slice(0, 2);
+  }
+
+  return fromAlternatives.slice(0, 2);
 }
 
 function applyProposalSlotsToSession(
@@ -361,8 +409,14 @@ function applyProposalSlotsToSession(
   analysis: DemoCustomerRequestAnalysis,
   patientName: string | null,
   locale: SupportedLocale,
+  proposalReply?: string | null,
 ): DemoPlaygroundSession {
-  const proposedEvents = buildCalendarEventsFromAnalysis(analysis, patientName, locale);
+  const proposedEvents = buildCalendarEventsFromAnalysis(
+    analysis,
+    patientName,
+    locale,
+    proposalReply,
+  );
   if (proposedEvents.length === 0) {
     return current;
   }
@@ -400,17 +454,6 @@ function removePlaygroundTentativeProposalsFromSession(current: DemoPlaygroundSe
     calendarEvents: current.calendarEvents.filter((event) => !releasedIds.has(event.id)),
     pendingConfirmationEventIds: current.pendingConfirmationEventIds.filter((id) => !releasedIds.has(id)),
   };
-}
-
-function findExistingProposalEvents(
-  events: NormalizedCalendarEvent[],
-  proposedEvents: NormalizedCalendarEvent[],
-) {
-  const proposedStartsAt = new Set(proposedEvents.map((event) => event.startsAt));
-
-  return events.filter(
-    (event) => isDemoPlaygroundPendingEvent(event) && proposedStartsAt.has(event.startsAt),
-  );
 }
 
 function dedupeAlternativesByStart<T extends { startsAt: string }>(alternatives: T[]) {
