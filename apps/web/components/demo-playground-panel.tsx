@@ -18,7 +18,7 @@ import {
 import { useEffect, useRef, useState, type RefObject } from "react";
 import { createPortal } from "react-dom";
 
-import { matchDemoServicesFromText, PRESENTATION_EXAMPLE_KEYS } from "@/lib/demo-presentation";
+import { matchDemoServicesFromText } from "@/lib/demo-presentation";
 import { readDemoBrainOverrides } from "@/lib/demo-brain-store";
 import { getWebDemoData } from "@/lib/demo-data";
 import {
@@ -72,21 +72,14 @@ export function DemoPlaygroundPanel({
     removeDraft,
     resetSession,
   } = useDemoPlaygroundSession(locale);
-  const presentationBootstrapped = useRef(false);
   const holdProgressRef = useRef(false);
   const resultSectionRef = useRef<HTMLDivElement>(null);
   const screenshotSeed = screenshotMode && !presentationMode ? buildScreenshotSeed(locale, t) : null;
-  const defaultSender = t("demoPlayground.senderPlaceholders.whatsapp");
-  const defaultPresentationText = t("demoPlayground.examples.hygieneVisitTomorrow");
   const [channel, setChannel] = useState<DemoPlaygroundChannel>(
     presentationMode || screenshotSeed ? "whatsapp" : "whatsapp",
   );
-  const [senderText, setSenderText] = useState(
-    presentationMode ? defaultSender : screenshotSeed?.senderText ?? "",
-  );
-  const [customerText, setCustomerText] = useState(
-    presentationMode ? defaultPresentationText : screenshotSeed?.customerText ?? "",
-  );
+  const [senderText, setSenderText] = useState(screenshotSeed?.senderText ?? "");
+  const [customerText, setCustomerText] = useState(screenshotSeed?.customerText ?? "");
   const [analysis, setAnalysis] = useState<DemoCustomerRequestAnalysis | null>(screenshotSeed?.analysis ?? null);
   const [editedReply, setEditedReply] = useState(screenshotSeed?.editedReply ?? "");
   const [draftActionId, setDraftActionId] = useState<string | null>(null);
@@ -97,9 +90,6 @@ export function DemoPlaygroundPanel({
   const [toastMessage, setToastMessage] = useState<string | null>(null);
   const [operatorAttentionOpen, setOperatorAttentionOpen] = useState(false);
   const [approvalCelebrationOpen, setApprovalCelebrationOpen] = useState(false);
-  const [activeExampleKey, setActiveExampleKey] = useState<string | null>(
-    presentationMode ? "hygieneVisitTomorrow" : null,
-  );
   const visibleChannels = presentationMode ? (["whatsapp"] as DemoPlaygroundChannel[]) : channels;
   const useChatLayout = channel === "whatsapp" || presentationMode;
   const hasPendingDraft =
@@ -243,21 +233,6 @@ export function DemoPlaygroundPanel({
     return () => window.clearInterval(timer);
   }, [isAnalyzing]);
 
-  useEffect(() => {
-    if (!presentationMode || presentationBootstrapped.current) {
-      return;
-    }
-
-    presentationBootstrapped.current = true;
-    void runAnalysis({
-      channel: "whatsapp",
-      customerText: defaultPresentationText,
-      senderText: defaultSender,
-    });
-    // Bootstrap once: presentation opens with the hero scenario already analysed.
-    // eslint-disable-next-line react-hooks/exhaustive-deps -- intentional single mount
-  }, [defaultPresentationText, defaultSender, presentationMode]);
-
   function handleResetDemo() {
     resetSession();
     setAnalysis(null);
@@ -268,30 +243,9 @@ export function DemoPlaygroundPanel({
     setToastMessage(null);
     setApprovalCelebrationOpen(false);
     setOperatorAttentionOpen(false);
-    setActiveExampleKey(null);
     setIsAnalyzing(false);
     setAnalysisProgress(0);
     setAnalysisStepIndex(0);
-    presentationBootstrapped.current = true;
-  }
-
-  async function applyExample(exampleKey: (typeof PRESENTATION_EXAMPLE_KEYS)[number]) {
-    const exampleText = t(`demoPlayground.examples.${exampleKey}`);
-    const exampleSender = t("demoPlayground.senderPlaceholders.whatsapp");
-
-    setActiveExampleKey(exampleKey);
-    setChannel("whatsapp");
-    setCustomerText(exampleText);
-    setSenderText(exampleSender);
-    setAnalysis(null);
-    setEditedReply("");
-    setError(null);
-
-    await runAnalysis({
-      channel: "whatsapp",
-      customerText: exampleText,
-      senderText: exampleSender,
-    });
   }
 
   useEffect(() => {
@@ -487,27 +441,10 @@ export function DemoPlaygroundPanel({
                   />
                 ) : null}
 
-                <div className="soreya-demo-example-chips soreya-demo-example-chips-inline">
-                  {PRESENTATION_EXAMPLE_KEYS.map((exampleKey) => (
-                    <button
-                      className={`soreya-demo-example-chip ${
-                        activeExampleKey === exampleKey ? "soreya-demo-example-chip-active" : ""
-                      }`}
-                      disabled={isAnalyzing}
-                      key={exampleKey}
-                      onClick={() => void applyExample(exampleKey)}
-                      type="button"
-                    >
-                      {t(`demoPlayground.exampleShort.${exampleKey}`)}
-                    </button>
-                  ))}
-                </div>
-
                 <div className="soreya-demo-chat-input-row">
                   <textarea
                     onChange={(event) => {
                       setCustomerText(event.target.value);
-                      setActiveExampleKey(null);
                       setError(null);
                     }}
                     placeholder={
@@ -619,32 +556,12 @@ export function DemoPlaygroundPanel({
               <textarea
                 onChange={(event) => {
                   setCustomerText(event.target.value);
-                  setActiveExampleKey(null);
                   setError(null);
                 }}
                 placeholder={t("demoPlayground.placeholder")}
                 rows={compact ? 4 : 5}
                 value={customerText}
               />
-            </div>
-
-            <p className="mt-4 text-xs font-medium uppercase tracking-[0.06em] text-stone-500">
-              {t("demoPlayground.examplesLabel")}
-            </p>
-            <div className="soreya-demo-example-chips">
-              {PRESENTATION_EXAMPLE_KEYS.map((exampleKey) => (
-                <button
-                  className={`soreya-demo-example-chip ${
-                    activeExampleKey === exampleKey ? "soreya-demo-example-chip-active" : ""
-                  }`}
-                  disabled={isAnalyzing}
-                  key={exampleKey}
-                  onClick={() => void applyExample(exampleKey)}
-                  type="button"
-                >
-                  {t(`demoPlayground.exampleShort.${exampleKey}`)}
-                </button>
-              ))}
             </div>
 
             <div className="soreya-demo-editorial-actions">

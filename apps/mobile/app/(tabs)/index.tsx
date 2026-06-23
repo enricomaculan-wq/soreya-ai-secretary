@@ -11,7 +11,7 @@ import {
   type SupportedLocale,
 } from '@soreya/shared';
 import { Link, type Href } from 'expo-router';
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { useEffect, useState } from 'react';
 import { Pressable, StyleSheet, Text, TextInput, View } from 'react-native';
 
 import { ClinicalIllustration, mobileTrustIllustrations } from '@/components/clinical-illustration';
@@ -38,7 +38,6 @@ type SecondaryLink = {
 };
 
 const channels: DemoPlaygroundChannel[] = ['email', 'whatsapp', 'quick_call'];
-const exampleKeys = ['hygieneVisitTomorrow', 'hygienePrice', 'rescheduleThursday'] as const;
 const recentStorageKey = 'soreya.mobile.demo.recent';
 const secondaryLinks: SecondaryLink[] = [
   {
@@ -68,15 +67,6 @@ export default function TodayScreen() {
   const [draftActionId, setDraftActionId] = useState<string | null>(null);
   const [message, setMessage] = useState<string | null>(null);
   const [presentationMode, setPresentationMode] = useState(false);
-  const presentationBootstrapped = useRef(false);
-  const examples = useMemo(
-    () => exampleKeys.map((key) => ({
-      key,
-      label: t(`demoPlayground.exampleShort.${key}`),
-      text: t(`demoPlayground.examples.${key}`),
-    })),
-    [t],
-  );
 
   useEffect(() => {
     let isMounted = true;
@@ -90,8 +80,6 @@ export default function TodayScreen() {
       setPresentationMode(enabled);
       if (enabled) {
         setChannel('whatsapp');
-        const seededText = t('demoPlayground.examples.hygieneVisitTomorrow');
-        setCustomerText(seededText);
       }
     }
 
@@ -100,17 +88,7 @@ export default function TodayScreen() {
     return () => {
       isMounted = false;
     };
-  }, [t]);
-
-  useEffect(() => {
-    if (!presentationMode || presentationBootstrapped.current || !customerText.trim()) {
-      return;
-    }
-
-    presentationBootstrapped.current = true;
-    runAnalysis();
-    // eslint-disable-next-line react-hooks/exhaustive-deps -- bootstrap presentation once
-  }, [presentationMode, customerText]);
+  }, []);
 
   useEffect(() => {
     let isMounted = true;
@@ -238,21 +216,6 @@ export default function TodayScreen() {
               <Text style={[styles.channelButtonText, channel === item ? styles.channelButtonTextActive : null]}>
                 {t(`demoPlayground.channels.${item === 'quick_call' ? 'quickCall' : item}`)}
               </Text>
-            </Pressable>
-          ))}
-        </View>
-        <View style={styles.examples}>
-          <Text style={styles.examplesLabel}>{t('demoPlayground.examplesLabel')}</Text>
-          {examples.map((example) => (
-            <Pressable
-              key={example.key}
-              onPress={() => {
-                setCustomerText(example.text);
-                setChannel('whatsapp');
-                setMessage(null);
-              }}
-              style={styles.exampleButton}>
-              <Text style={styles.exampleText}>{example.label}</Text>
             </Pressable>
           ))}
         </View>
@@ -489,30 +452,6 @@ const styles = StyleSheet.create({
   },
   channelButtonTextActive: {
     color: '#ffffff',
-  },
-  examples: {
-    gap: 8,
-    marginTop: 14,
-  },
-  examplesLabel: {
-    color: '#78716c',
-    fontSize: 11,
-    fontWeight: '700',
-    letterSpacing: 0.6,
-    textTransform: 'uppercase',
-  },
-  exampleButton: {
-    backgroundColor: '#f5f5f4',
-    borderColor: '#e8e8e8',
-    borderRadius: 8,
-    borderWidth: 1,
-    padding: 12,
-  },
-  exampleText: {
-    color: '#525252',
-    fontSize: 13,
-    fontWeight: '700',
-    lineHeight: 18,
   },
   replyLabel: {
     color: '#171717',

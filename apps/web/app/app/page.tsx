@@ -60,9 +60,7 @@ function DemoAppPageContent() {
 
       <AppPageHeader
         badges={presentationMode ? undefined : <Badge tone="trust">{t("systemStatus.approvalFirst")}</Badge>}
-        description={
-          presentationMode ? t("demoApp.hero.presentationSubtitle") : t("demoApp.hero.subtitle")
-        }
+        description={presentationMode ? undefined : t("demoApp.hero.subtitle")}
         title={presentationMode ? t("demoApp.hero.presentationTitle") : t("demoApp.hero.title")}
       />
 
