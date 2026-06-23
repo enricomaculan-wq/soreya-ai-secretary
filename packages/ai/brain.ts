@@ -397,7 +397,7 @@ export function polishDemoSuggestedReply(input: {
       : `I checked the calendar: I can offer ${slots}. Which one works best for you?`;
   } else if (
     input.alternatives.length > 0
-    && !replyMentionsAlternativeSlots(reply, input.alternatives)
+    && !replyMentionsAlternativeSlots(reply, input.alternatives, input.locale)
     && !replyAlreadyProposesSlots(reply)
   ) {
     const slots = formatAlternativeSlotsForReply(input.alternatives, input.locale);
@@ -588,6 +588,7 @@ function formatAlternativeSlotsForReply(alternatives: AvailabilitySlot[], locale
         month: "short",
         hour: "2-digit",
         minute: "2-digit",
+        timeZone: "Europe/Rome",
       }).format(new Date(slot.startsAt)),
     )
     .join(isItalianLocale(locale) ? " oppure " : " or ");
@@ -636,14 +637,20 @@ function replyAsksForDayOrTimePreference(reply: string) {
   ].some((hint) => normalized.includes(hint));
 }
 
-function replyMentionsAlternativeSlots(reply: string, alternatives: AvailabilitySlot[]) {
+function replyMentionsAlternativeSlots(reply: string, alternatives: AvailabilitySlot[], locale = "it-IT") {
   const normalizedReply = normalizeMatchText(reply);
 
-  return alternatives.some((slot) => {
-    const date = new Date(slot.startsAt);
-    const hour = `${date.getHours()}`.padStart(2, "0");
-    const minute = `${date.getMinutes()}`.padStart(2, "0");
-    return normalizedReply.includes(`${hour}:${minute}`) || normalizedReply.includes(`${hour}.${minute}`);
+  return alternatives.every((slot) => {
+    const time = new Intl.DateTimeFormat(locale.startsWith("it") ? "it-IT" : "en-US", {
+      hour: "2-digit",
+      minute: "2-digit",
+      timeZone: "Europe/Rome",
+    })
+      .format(new Date(slot.startsAt))
+      .replace(/^0/, "")
+      .toLowerCase();
+
+    return normalizedReply.includes(time) || normalizedReply.includes(time.replace(":", "."));
   });
 }
 

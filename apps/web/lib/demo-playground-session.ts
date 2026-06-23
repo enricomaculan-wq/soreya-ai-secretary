@@ -2,11 +2,9 @@
 
 import {
   extractDemoConfirmedTimeHint,
-  extractDemoOfferedTimeHints,
   getSoreyaDemoData,
   isDemoPatientConfirmationText,
   resolveDemoPatientFirstName,
-  type AvailabilitySlot,
   type DemoCustomerRequestAnalysis,
   type Json,
   type NormalizedCalendarEvent,
@@ -164,14 +162,8 @@ export function useDemoPlaygroundSession(locale: SupportedLocale) {
   );
 
   const holdProposalSlots = useCallback(
-    (
-      analysis: DemoCustomerRequestAnalysis,
-      patientName: string | null,
-      proposalReply?: string | null,
-    ) => {
-      updateSession((current) =>
-        applyProposalSlotsToSession(current, analysis, patientName, locale, proposalReply),
-      );
+    (analysis: DemoCustomerRequestAnalysis, patientName: string | null) => {
+      updateSession((current) => applyProposalSlotsToSession(current, analysis, patientName, locale));
     },
     [locale, updateSession],
   );
@@ -182,12 +174,7 @@ export function useDemoPlaygroundSession(locale: SupportedLocale) {
 
   const approveDraft = useCallback(
     (analysis: DemoCustomerRequestAnalysis, replyBody: string, patientName: string | null) => {
-      const proposedEvents = buildCalendarEventsFromAnalysis(
-        analysis,
-        patientName,
-        locale,
-        replyBody,
-      );
+      const proposedEvents = buildCalendarEventsFromAnalysis(analysis, patientName, locale);
 
       updateSession((current) => {
         const messages = current.messages.some((message) => message.status === "draft")
@@ -308,13 +295,12 @@ export function buildCalendarEventsFromAnalysis(
   analysis: DemoCustomerRequestAnalysis,
   patientName: string | null,
   locale: SupportedLocale,
-  proposalReply?: string | null,
 ): NormalizedCalendarEvent[] {
   if (analysis.detectedIntent !== "new_appointment" && analysis.detectedIntent !== "reschedule_appointment") {
     return [];
   }
 
-  const slots = resolveProposalSlotsForCalendar(analysis, proposalReply);
+  const slots = resolveProposalSlotsForCalendar(analysis);
   if (slots.length === 0) {
     return [];
   }
@@ -367,41 +353,12 @@ export function buildCalendarEventFromAnalysis(
   analysis: DemoCustomerRequestAnalysis,
   patientName: string | null,
   locale: SupportedLocale,
-  proposalReply?: string | null,
 ): NormalizedCalendarEvent | null {
-  return buildCalendarEventsFromAnalysis(analysis, patientName, locale, proposalReply)[0] ?? null;
+  return buildCalendarEventsFromAnalysis(analysis, patientName, locale)[0] ?? null;
 }
 
-function resolveProposalSlotsForCalendar(
-  analysis: DemoCustomerRequestAnalysis,
-  proposalReply?: string | null,
-): AvailabilitySlot[] {
-  const fromAlternatives = dedupeAlternativesByStart(analysis.alternatives);
-  const durationMinutes =
-    fromAlternatives.find((slot) => slot.durationMinutes > 0)?.durationMinutes ?? 45;
-  const replyTimes = proposalReply ? extractDemoOfferedTimeHints(proposalReply) : [];
-  const anchor = fromAlternatives[0]?.startsAt ?? analysis.requestedStartsAt;
-
-  if (replyTimes.length >= 2 && anchor) {
-    const anchorDate = new Date(anchor);
-    const replySlots = replyTimes.slice(0, 2).map((time) => {
-      const [hours, minutes] = time.split(":").map((part) => Number(part));
-      const startsAt = new Date(anchorDate);
-      startsAt.setHours(hours, minutes, 0, 0);
-
-      return {
-        startsAt: startsAt.toISOString(),
-        endsAt: new Date(startsAt.getTime() + durationMinutes * 60_000).toISOString(),
-        durationMinutes,
-        provider: "google" as const,
-        calendarAccountId: null,
-      } satisfies AvailabilitySlot;
-    });
-
-    return dedupeAlternativesByStart(replySlots).slice(0, 2);
-  }
-
-  return fromAlternatives.slice(0, 2);
+function resolveProposalSlotsForCalendar(analysis: DemoCustomerRequestAnalysis) {
+  return dedupeAlternativesByStart(analysis.alternatives).slice(0, 2);
 }
 
 function applyProposalSlotsToSession(
@@ -409,14 +366,8 @@ function applyProposalSlotsToSession(
   analysis: DemoCustomerRequestAnalysis,
   patientName: string | null,
   locale: SupportedLocale,
-  proposalReply?: string | null,
 ): DemoPlaygroundSession {
-  const proposedEvents = buildCalendarEventsFromAnalysis(
-    analysis,
-    patientName,
-    locale,
-    proposalReply,
-  );
+  const proposedEvents = buildCalendarEventsFromAnalysis(analysis, patientName, locale);
   if (proposedEvents.length === 0) {
     return current;
   }

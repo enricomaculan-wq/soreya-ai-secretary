@@ -6,7 +6,7 @@ import type {
   SuggestedActionType,
   SupportedLocale,
 } from "@soreya/shared";
-import { resolveLocale, resolveDemoPatientFirstName, detectDemoAppointmentConfirmationFollowUp, detectDemoAppointmentAmbiguousConfirmationFollowUp, describeDemoScheduleFacts, findDemoFreeSlots, isDemoSlotBusy, detectDemoCustomerGreeting, formatDemoStudioGreeting, extractDemoOfferedTimeHints, buildDemoOfferedTimeClarificationReply } from "@soreya/shared";
+import { resolveLocale, resolveDemoPatientFirstName, detectDemoAppointmentConfirmationFollowUp, detectDemoAppointmentAmbiguousConfirmationFollowUp, describeDemoScheduleFacts, findDemoFreeSlots, isDemoSlotBusy, detectDemoCustomerGreeting, formatDemoStudioGreeting, extractDemoOfferedTimeHints, buildDemoOfferedTimeClarificationReply, atEuropeRome } from "@soreya/shared";
 import { z } from "zod";
 
 import {
@@ -1472,7 +1472,7 @@ function demoCalendarWithRequestedTime(
   options: { durationMinutes?: number; alternativeDay?: Date; preferMorning?: boolean; preferAfternoon?: boolean } = {},
 ) {
   const durationMinutes = options.durationMinutes ?? 45;
-  const requestedStart = atLocal(dateKey(day), hour, minute);
+  const requestedStart = atEuropeRome(dateKey(day), hour, minute);
   const conflictDetected = isDemoSlotBusy(day, hour, minute, durationMinutes);
   const alternativeDay = options.alternativeDay ?? day;
 
@@ -2760,7 +2760,7 @@ function resolveDemoRescheduleCalendar(
   }
 
   if (targetKind === "tomorrow") {
-    const requestedStart = atLocal(dateKey(tomorrow), 15, 0);
+    const requestedStart = atEuropeRome(dateKey(tomorrow), 15, 0);
 
     return {
       requestedDateTimeText: locale === "it" ? "domani alle 15:00" : "tomorrow at 3:00 PM",
@@ -2773,7 +2773,7 @@ function resolveDemoRescheduleCalendar(
     };
   }
 
-  const requestedStart = atLocal(dateKey(now), 15, 0);
+  const requestedStart = atEuropeRome(dateKey(now), 15, 0);
 
   return {
     requestedDateTimeText: locale === "it" ? "oggi alle 15:00" : "today at 3:00 PM",
@@ -3889,6 +3889,7 @@ function formatSlotTime(value: string, locale: SupportedLocale) {
   const formatted = new Intl.DateTimeFormat(locale === "it" ? "it-IT" : "en-US", {
     hour: "2-digit",
     minute: "2-digit",
+    timeZone: "Europe/Rome",
   }).format(new Date(value));
 
   const withoutLeadingZero = formatted.replace(/^0/, "");
@@ -3954,14 +3955,14 @@ function appointmentDate(appointment: DemoAppointment) {
   const now = new Date();
 
   if (appointment.day === "tomorrow") {
-    return atLocal(dateKey(addDays(now, 1)), appointment.hour, appointment.minute);
+    return atEuropeRome(dateKey(addDays(now, 1)), appointment.hour, appointment.minute);
   }
 
   if (appointment.day === "next_tuesday") {
-    return atLocal(dateKey(addDays(nextWeekStart(now), 1)), appointment.hour, appointment.minute);
+    return atEuropeRome(dateKey(addDays(nextWeekStart(now), 1)), appointment.hour, appointment.minute);
   }
 
-  return atLocal(dateKey(nextWeekday(now, 4)), appointment.hour, appointment.minute);
+  return atEuropeRome(dateKey(nextWeekday(now, 4)), appointment.hour, appointment.minute);
 }
 
 function hasTomorrow(text: string) {
@@ -4026,11 +4027,6 @@ function resolveNamedWeekday(now: Date, jsWeekday: number) {
   }
 
   return nextWeekday(now, jsWeekday);
-}
-
-function atLocal(day: string, hour: number, minute: number) {
-  const [year, month, date] = day.split("-").map(Number);
-  return new Date(year, month - 1, date, hour, minute, 0, 0);
 }
 
 function dateKey(value: Date) {

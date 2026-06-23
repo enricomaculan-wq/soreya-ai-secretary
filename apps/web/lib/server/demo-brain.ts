@@ -9,6 +9,7 @@ import {
   getDemoBrainContext,
   readRequiredDurationMinutesFromConstraints,
   resolveDemoPatientFirstName,
+  syncDemoProposalReplyWithAlternatives,
   type AvailabilitySlot,
   type DemoDetectedIntent,
   type Json,
@@ -69,7 +70,15 @@ export function enrichDemoAnalyzeResultWithContext<T extends DemoBrainEnrichment
   brainContext: OrganizationBrainContext,
 ): T {
   if (shouldSkipDemoBrainEnrichment(response)) {
-    return response;
+    return {
+      ...response,
+      suggestedReply: syncDemoProposalReplyWithAlternatives(
+        response.suggestedReply,
+        response.alternatives ?? [],
+        response.locale,
+        response.detectedIntent,
+      ),
+    };
   }
 
   const enriched = enrichWithOrganizationBrain(brainContext, {
@@ -94,7 +103,7 @@ export function enrichDemoAnalyzeResultWithContext<T extends DemoBrainEnrichment
       previousAlternativeCount,
     },
   );
-  const suggestedReply = polishDemoSuggestedReply({
+  const polishedReply = polishDemoSuggestedReply({
     locale: response.locale === "it" ? "it-IT" : "en-US",
     senderName: resolveDemoPatientFirstName(response.senderName, response.customerName),
     customerText: response.customerText,
@@ -103,6 +112,12 @@ export function enrichDemoAnalyzeResultWithContext<T extends DemoBrainEnrichment
     requiredDurationMinutes: enriched.requiredDurationMinutes,
     alternatives: alternatives ?? [],
   });
+  const suggestedReply = syncDemoProposalReplyWithAlternatives(
+    polishedReply,
+    alternatives ?? [],
+    response.locale,
+    response.detectedIntent,
+  );
 
   return {
     ...response,

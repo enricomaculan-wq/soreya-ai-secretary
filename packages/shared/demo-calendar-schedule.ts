@@ -113,44 +113,111 @@ function addDays(value: Date, days: number) {
   return new Date(value.getTime() + days * 24 * 60 * 60_000);
 }
 
+const DEMO_TIMEZONE = "Europe/Rome";
+
+const ROME_WEEKDAY_TO_ISO: Record<string, number> = {
+  Mon: 1,
+  Tue: 2,
+  Wed: 3,
+  Thu: 4,
+  Fri: 5,
+  Sat: 6,
+  Sun: 7,
+};
+
 function dateKey(value: Date) {
   return new Intl.DateTimeFormat("en-CA", {
-    timeZone: "Europe/Rome",
+    timeZone: DEMO_TIMEZONE,
     year: "numeric",
     month: "2-digit",
     day: "2-digit",
   }).format(value);
 }
 
-function atLocal(day: string, hour: number, minute: number) {
-  const [year, month, date] = day.split("-").map(Number);
-  return new Date(year, month - 1, date, hour, minute, 0, 0);
+function getRomeDateTimeParts(timestamp: number) {
+  const parts = new Intl.DateTimeFormat("en-CA", {
+    timeZone: DEMO_TIMEZONE,
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+    hour: "2-digit",
+    minute: "2-digit",
+    second: "2-digit",
+    hour12: false,
+  }).formatToParts(new Date(timestamp));
+
+  const read = (type: Intl.DateTimeFormatPartTypes) =>
+    Number(parts.find((part) => part.type === type)?.value ?? "0");
+
+  const hour = read("hour");
+
+  return {
+    year: read("year"),
+    month: read("month"),
+    day: read("day"),
+    hour: hour === 24 ? 0 : hour,
+    minute: read("minute"),
+  };
 }
 
-function atLocalOnDay(day: Date, hour: number, minute: number) {
-  return atLocal(dateKey(day), hour, minute);
+/** Wall-clock time in Europe/Rome as a UTC Date. */
+export function atEuropeRome(day: string, hour: number, minute: number) {
+  const [year, month, date] = day.split("-").map(Number);
+  let utcMs = Date.UTC(year, month - 1, date, hour - 1, minute, 0);
+
+  for (let attempt = 0; attempt < 6; attempt += 1) {
+    const parts = getRomeDateTimeParts(utcMs);
+
+    if (
+      parts.year === year
+      && parts.month === month
+      && parts.day === date
+      && parts.hour === hour
+      && parts.minute === minute
+    ) {
+      return new Date(utcMs);
+    }
+
+    const minuteOffset =
+      (date - parts.day) * 24 * 60
+      + (hour - parts.hour) * 60
+      + (minute - parts.minute);
+
+    utcMs += minuteOffset * 60_000;
+  }
+
+  return new Date(utcMs);
+}
+
+function atEuropeRomeOnDay(day: Date, hour: number, minute: number) {
+  return atEuropeRome(dateKey(day), hour, minute);
 }
 
 export function getIsoWeekday(day: Date) {
-  const weekday = day.getDay();
-  return weekday === 0 ? 7 : weekday;
+  const weekday = new Intl.DateTimeFormat("en-US", {
+    timeZone: DEMO_TIMEZONE,
+    weekday: "short",
+  }).format(day);
+
+  return ROME_WEEKDAY_TO_ISO[weekday] ?? 1;
 }
 
 export function isDemoWorkday(day: Date) {
-  const weekday = day.getDay();
-  return weekday !== 0 && weekday !== 6;
+  const weekday = getIsoWeekday(day);
+  return weekday >= 1 && weekday <= 5;
 }
 
 export function getNextDemoWorkdays(count: number, reference = new Date()) {
   const days: Date[] = [];
-  const cursor = new Date(reference);
-  cursor.setHours(12, 0, 0, 0);
+  let cursor = atEuropeRome(dateKey(reference), 12, 0);
 
   while (days.length < count) {
     if (isDemoWorkday(cursor)) {
       days.push(new Date(cursor));
     }
-    cursor.setDate(cursor.getDate() + 1);
+
+    const nextDay = addDays(cursor, 1);
+    cursor = atEuropeRome(dateKey(nextDay), 12, 0);
   }
 
   return days;
@@ -172,7 +239,7 @@ function getBusyBlocksForDay(day: Date): DemoBusyBlock[] {
 
 function getBusyIntervalsForDay(day: Date): BusyInterval[] {
   return getBusyBlocksForDay(day).map((block) => {
-    const startsAt = atLocalOnDay(day, block.hour, block.minute);
+    const startsAt = atEuropeRomeOnDay(day, block.hour, block.minute);
     return {
       startsAt,
       endsAt: addMinutes(startsAt, block.durationMinutes),
@@ -190,7 +257,7 @@ export function isDemoSlotBusy(
   minute: number,
   durationMinutes = DEMO_SLOT_DURATION_MINUTES,
 ) {
-  const startsAt = atLocalOnDay(day, hour, minute);
+  const startsAt = atEuropeRomeOnDay(day, hour, minute);
   const endsAt = addMinutes(startsAt, durationMinutes);
   return getBusyIntervalsForDay(day).some((busy) =>
     intervalsOverlap(startsAt, endsAt, busy.startsAt, busy.endsAt),
@@ -219,13 +286,13 @@ export function findDemoFreeSlots(
       return false;
     }
 
-    const startsAt = atLocalOnDay(targetDay, candidate.hour, candidate.minute);
+    const startsAt = atEuropeRomeOnDay(targetDay, candidate.hour, candidate.minute);
     const endsAt = addMinutes(startsAt, durationMinutes);
     return !busy.some((interval) => intervalsOverlap(startsAt, endsAt, interval.startsAt, interval.endsAt));
   });
 
   const toSlot = (candidate: { hour: number; minute: number }) => {
-    const startsAt = atLocalOnDay(targetDay, candidate.hour, candidate.minute);
+    const startsAt = atEuropeRomeOnDay(targetDay, candidate.hour, candidate.minute);
     return {
       startsAt: startsAt.toISOString(),
       endsAt: addMinutes(startsAt, durationMinutes).toISOString(),
@@ -234,15 +301,6 @@ export function findDemoFreeSlots(
       calendarAccountId: null,
     } satisfies AvailabilitySlot;
   };
-
-  if (maxSlots >= 2 && !options.preferMorning && !options.preferAfternoon) {
-    const morning = freeCandidates.find((candidate) => candidate.hour < 13);
-    const afternoon = freeCandidates.find((candidate) => candidate.hour >= 14);
-
-    if (morning && afternoon) {
-      return [morning, afternoon].slice(0, maxSlots).map((candidate) => toSlot(candidate));
-    }
-  }
 
   return freeCandidates.slice(0, maxSlots).map((candidate) => toSlot(candidate));
 }
@@ -268,7 +326,7 @@ export function buildDemoScheduleCalendarEvents(input: {
 
   for (const day of workdays) {
     for (const block of getBusyBlocksForDay(day)) {
-      const startsAt = atLocalOnDay(day, block.hour, block.minute);
+      const startsAt = atEuropeRomeOnDay(day, block.hour, block.minute);
       const endsAt = addMinutes(startsAt, block.durationMinutes);
       events.push({
         id: `demo-schedule-${dateKey(day)}-${block.hour}-${block.minute}` as Uuid,
@@ -372,14 +430,15 @@ export function resolveDemoTargetDayFromText(text: string, referenceDate = new D
 }
 
 function nextWeekday(reference: Date, isoWeekday: number) {
-  const cursor = new Date(reference);
-  cursor.setHours(12, 0, 0, 0);
+  let cursor = atEuropeRome(dateKey(reference), 12, 0);
 
   for (let index = 0; index < 14; index += 1) {
     if (getIsoWeekday(cursor) === isoWeekday) {
       return new Date(cursor);
     }
-    cursor.setDate(cursor.getDate() + 1);
+
+    const nextDay = addDays(cursor, 1);
+    cursor = atEuropeRome(dateKey(nextDay), 12, 0);
   }
 
   return addDays(reference, 1);

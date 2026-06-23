@@ -1,3 +1,4 @@
+import { atEuropeRome } from "./demo-calendar-schedule";
 import { getSoreyaDemoData } from "./demo-data";
 import { getDictionary, resolveLocale, t as translate, type SupportedLocale } from "./i18n";
 import type { AvailabilitySlot, Json, SuggestedAction, SuggestedActionType, Uuid } from "./index";
@@ -757,8 +758,8 @@ function parseRequestedDateTime(text: string): ParsedDateTime {
       requestedDateTimeText,
       requestedStartsAt: null,
       requestedEndsAt: null,
-      requestedWindowStart: atLocal(dateKey(dateResult.date), 9, 0),
-      requestedWindowEnd: atLocal(dateKey(dateResult.date), 17, 0),
+      requestedWindowStart: atEuropeRome(dateKey(dateResult.date), 9, 0),
+      requestedWindowEnd: atEuropeRome(dateKey(dateResult.date), 17, 0),
       timeIsApproximate: true,
     };
   }
@@ -768,13 +769,13 @@ function parseRequestedDateTime(text: string): ParsedDateTime {
       requestedDateTimeText,
       requestedStartsAt: null,
       requestedEndsAt: null,
-      requestedWindowStart: atLocal(dateKey(dateResult.date), timeResult.windowStartHour ?? 9, 0),
-      requestedWindowEnd: atLocal(dateKey(dateResult.date), timeResult.windowEndHour ?? 17, 0),
+      requestedWindowStart: atEuropeRome(dateKey(dateResult.date), timeResult.windowStartHour ?? 9, 0),
+      requestedWindowEnd: atEuropeRome(dateKey(dateResult.date), timeResult.windowEndHour ?? 17, 0),
       timeIsApproximate: true,
     };
   }
 
-  const requestedStartsAt = atLocal(dateKey(dateResult.date), timeResult.hour, timeResult.minute);
+  const requestedStartsAt = atEuropeRome(dateKey(dateResult.date), timeResult.hour, timeResult.minute);
 
   return {
     requestedDateTimeText,
@@ -793,8 +794,8 @@ function parseDateReference(text: string, now: Date) {
       label: matchFirst(text, ["prossima settimana", "next week"]) ?? "next week",
       date: start,
       approximateRange: {
-        start: atLocal(dateKey(start), 9, 0),
-        end: atLocal(dateKey(addDays(start, 4)), 17, 0),
+        start: atEuropeRome(dateKey(start), 9, 0),
+        end: atEuropeRome(dateKey(addDays(start, 4)), 17, 0),
       },
     };
   }
@@ -982,14 +983,14 @@ function isWithinWorkingHours(date: Date) {
 }
 
 function startOfNextWorkingDay(now: Date) {
-  let candidate = atLocal(dateKey(now), 9, 0);
+  let candidate = atEuropeRome(dateKey(now), 9, 0);
 
   if (candidate.getTime() <= now.getTime()) {
-    candidate = atLocal(dateKey(addDays(now, 1)), 9, 0);
+    candidate = atEuropeRome(dateKey(addDays(now, 1)), 9, 0);
   }
 
   while (!isWithinWorkingHours(candidate)) {
-    candidate = atLocal(dateKey(addDays(candidate, 1)), 9, 0);
+    candidate = atEuropeRome(dateKey(addDays(candidate, 1)), 9, 0);
   }
 
   return candidate;
@@ -1006,12 +1007,6 @@ function nextWeekday(now: Date, targetDay: number) {
   const daysUntilTarget = (targetDay - currentDay + 7) % 7 || 7;
   return addDays(now, daysUntilTarget);
 }
-
-function atLocal(day: string, hour: number, minute: number) {
-  const [year, month, date] = day.split("-").map(Number);
-  return new Date(year, month - 1, date, hour, minute, 0, 0);
-}
-
 function dateKey(value: Date) {
   return new Intl.DateTimeFormat("en-CA", {
     timeZone: "Europe/Rome",
@@ -1301,6 +1296,92 @@ export function isDemoPatientConfirmationText(text: string) {
 export function isDemoNewRequestFollowUpText(text: string) {
   const normalized = text.trim().toLowerCase();
   return DEMO_NEW_REQUEST_FOLLOW_UP_PATTERNS.some((pattern) => pattern.test(normalized));
+}
+
+export function formatDemoSlotClockTime(startsAt: string, locale: SupportedLocale | string) {
+  const isItalian = resolveLocale(locale) === "it";
+  const formatted = new Intl.DateTimeFormat(isItalian ? "it-IT" : "en-US", {
+    hour: "2-digit",
+    minute: "2-digit",
+    timeZone: "Europe/Rome",
+  }).format(new Date(startsAt));
+
+  const withoutLeadingZero = formatted.replace(/^0/, "");
+  return isItalian ? withoutLeadingZero.toLowerCase() : withoutLeadingZero;
+}
+
+export function formatDemoAlternativeClockTimesForReply(
+  alternatives: AvailabilitySlot[],
+  locale: SupportedLocale | string,
+) {
+  const isItalian = resolveLocale(locale) === "it";
+  const slots = alternatives.slice(0, 2);
+
+  if (slots.length === 0) {
+    return isItalian ? "alle 9:30" : "9:30 AM";
+  }
+
+  return slots
+    .map((slot) => {
+      const time = formatDemoSlotClockTime(slot.startsAt, locale);
+      return isItalian ? `alle ${time}` : time;
+    })
+    .join(isItalian ? " oppure " : " or ");
+}
+
+export function syncDemoProposalReplyWithAlternatives(
+  reply: string,
+  alternatives: AvailabilitySlot[],
+  locale: SupportedLocale | string,
+  intent: DemoDetectedIntent,
+) {
+  if (intent !== "new_appointment" && intent !== "reschedule_appointment") {
+    return reply;
+  }
+
+  if (alternatives.length === 0) {
+    return reply;
+  }
+
+  if (/\b(confermo per|i confirm|see you then|a presto)\b/i.test(reply)) {
+    return reply;
+  }
+
+  const slotsToMention = alternatives.slice(0, 2);
+  const slotsText = formatDemoAlternativeClockTimesForReply(alternatives, locale);
+  const isItalian = resolveLocale(locale) === "it";
+  const normalizedReply = reply.toLowerCase();
+  const mentionsAllSlots = slotsToMention.every((slot) =>
+    normalizedReply.includes(formatDemoSlotClockTime(slot.startsAt, locale)),
+  );
+
+  if (mentionsAllSlots) {
+    return reply;
+  }
+
+  const availabilityPattern = isItalian
+    ? /ho disponibilit[aà][^.?\n]*/i
+    : /\bi have availability\b[^.?\n]*/i;
+
+  if (availabilityPattern.test(reply)) {
+    return reply.replace(
+      availabilityPattern,
+      isItalian ? `ho disponibilità ${slotsText}` : `I have availability ${slotsText}`,
+    );
+  }
+
+  const proposePattern = isItalian
+    ? /(le posso proporre|posso proporle|ho controllato l['']agenda:\s*le posso proporre)[^.?\n]*/i
+    : /(i can offer|i checked the calendar:\s*i can offer)[^.?\n]*/i;
+
+  if (proposePattern.test(reply)) {
+    return reply.replace(
+      proposePattern,
+      isItalian ? `ho disponibilità ${slotsText}` : `I have availability ${slotsText}`,
+    );
+  }
+
+  return reply;
 }
 
 export function extractDemoOfferedTimeHints(studioReply: string): string[] {
